@@ -357,21 +357,3 @@ class HydrusRequests:
             )
             for resp_item in resp
         )
-
-
-
-def hydrus_import(
-        hydrus: hydrus_api.Client,
-        content_file: str|os.PathLike|hydrus_api.BinaryFileLike = None,
-        *,
-        page_name: str|None = None,
-        urls: Iterable[str] = None,
-        tags: Iterable[str] = None,
-        tags_namespace: str|None = None
-    ) -> list[dict[str, str|int]]:
-    """OBSOLETE"""
-    return HydrusRequests(hydrus).hydrus_import(content_file, page_name=page_name, urls=urls, tags=tags, tags_namespace=tags_namespace)
-
-def hydrus_import_resp_to_str(resp: list[dict[str, str|int]]) -> str:
-    """OBSOLETE"""
-    return HydrusRequests.hydrus_import_resp_to_str(resp)

@@ -14,7 +14,7 @@ import hydrus_api
 
 from config import CONF
 from tools import bytes_strformat, get_temp_folder
-from hydrus_requests import hydrus_import, hydrus_import_resp_to_str
+from hydrus_requests import HydrusRequests
 from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, answer_disabled_content
 
 async def start_script():
@@ -41,17 +41,17 @@ async def start_script():
                 content_file
             )
 
-            #resp = hydrus_import(hydrus, content_file, tags=tags, urls=urls)
-            #logger.debug(f"{resp}")
-            #resp_str = hydrus_import_resp_to_str(resp)
+            resp = HydrusRequests(hydrus).hydrus_import(content_file, tags=tags, urls=urls)
+            logger.debug(f"{resp}")
+            resp_str = HydrusRequests.hydrus_import_resp_to_str(resp)
 
             content_file.seek(0, io.SEEK_END)
+            #reply = "Тип: фото.\n" \
+            #    f"{msg_content}\n" \
+            #    f"{bytes_strformat(content_file.tell())}"
             reply = "Тип: фото.\n" \
-                f"{msg_content}\n" \
+                f"{resp_str}\n" \
                 f"{bytes_strformat(content_file.tell())}"
-            # reply = "Тип: фото.\n" \
-            #     f"{resp_str}\n" \
-            #     f"{bytes_strformat(content_file.tell())}"
         elif msg_content := (msg.video or msg.animation or msg.video_note):
             if not ((msg.video and "video" in CONF["CONTENT_TYPES"]) \
                 or (msg.animation and "animation" in CONF["CONTENT_TYPES"]) \
@@ -74,9 +74,9 @@ async def start_script():
                 content_file
             )
 
-            #resp = hydrus_import(hydrus, content_file, tags=tags, urls=urls)
+            #resp = HydrusRequests(hydrus).hydrus_import(content_file, tags=tags, urls=urls)
             #logger.debug(f"{resp}")
-            #resp_str = hydrus_import_resp_to_str(resp)
+            #resp_str = HydrusRequests.hydrus_import_resp_to_str(resp)
 
             reply = "Тип: видео.\n" \
                 f"{msg_content}\n" \
@@ -119,9 +119,9 @@ async def start_script():
                 content_file
             )
 
-            #resp = hydrus_import(hydrus, content_file, tags=tags, urls=urls)
+            #resp = HydrusRequests(hydrus).hydrus_import(content_file, tags=tags, urls=urls)
             #logger.debug(f"{resp}")
-            #resp_str = hydrus_import_resp_to_str(resp)
+            #resp_str = HydrusRequests.hydrus_import_resp_to_str(resp)
 
             reply = "Тип: аудио.\n" \
                 f"{msg_content}\n" \
@@ -153,9 +153,9 @@ async def start_script():
                 content_file
             )
 
-            #resp = hydrus_import(hydrus, content_file, tags=tags, urls=urls)
+            #resp = HydrusRequests(hydrus).hydrus_import(content_file, tags=tags, urls=urls)
             #logger.debug(f"{resp}")
-            #resp_str = hydrus_import_resp_to_str(resp)
+            #resp_str = HydrusRequests.hydrus_import_resp_to_str(resp)
 
             reply = "Тип: документ.\n" \
                 f"{msg_content}\n" \
@@ -171,10 +171,10 @@ async def start_script():
             tags = get_tags_from_msg(msg)
             urls = get_urls_from_msg(msg)
             # Скачиваем ссылки, проставляем теги ко всем ним
-            resp = hydrus_import(hydrus, urls=urls, tags=tags)
+            resp = HydrusRequests(hydrus).hydrus_import(urls=urls, tags=tags)
 
             logger.debug(f"{resp}")
-            resp_str = hydrus_import_resp_to_str(resp)
+            resp_str = HydrusRequests.hydrus_import_resp_to_str(resp)
             reply = "Тип: текст.\n" \
                 f"{resp_str}"
             # Отправка собственно скачанного контента
