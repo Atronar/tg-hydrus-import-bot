@@ -360,53 +360,6 @@ class HydrusRequests:
 
 
 
-def get_page_hash_by_name(
-        hydrus: hydrus_api.Client,
-        page_name: str,
-        *,
-        pages: Iterable[dict[str, Any]]|None = None
-    ) -> str|None:
-    """OBSOLETE"""
-    return HydrusRequests(hydrus).get_page_hash_by_name(page_name, pages=pages)
-
-def get_tags_namespace_hash(hydrus: hydrus_api.Client, tags_namespace: str|None = None) -> str:
-    """OBSOLETE"""
-    return HydrusRequests(hydrus).get_tags_namespace_hash(tags_namespace)
-
-def hydrus_add_file(
-        hydrus: hydrus_api.Client,
-        file: str|os.PathLike|hydrus_api.BinaryFileLike,
-        *,
-        page_name: str|None = None
-    ) -> dict[str, str|int]:
-    """OBSOLETE"""
-    return HydrusRequests(hydrus).hydrus_add_file(file, page_name=page_name)
-
-def hydrus_add_file_from_url(
-        hydrus: hydrus_api.Client,
-        url: str,
-        *,
-        page_name: str|None = None,
-        tags: Iterable[str]|None = None,
-        tags_namespace: str|None = None
-    ) -> dict[str, int|str]:
-    """OBSOLETE"""
-    return HydrusRequests(hydrus).hydrus_add_file_from_url(url, page_name=page_name, tags=tags, tags_namespace=tags_namespace)
-
-def hydrus_add_tags(
-        hydrus: hydrus_api.Client,
-        file_hash: str,
-        tags: Iterable[str],
-        *,
-        tags_namespace: str|None = None
-    ):
-    """OBSOLETE"""
-    return HydrusRequests(hydrus).hydrus_add_tags(file_hash, tags, tags_namespace=tags_namespace)
-
-def hydrus_add_urls(hydrus: hydrus_api.Client, file_hash: str, urls: Iterable[str]):
-    """OBSOLETE"""
-    return HydrusRequests(hydrus).hydrus_add_urls(file_hash, urls)
-
 def hydrus_import(
         hydrus: hydrus_api.Client,
         content_file: str|os.PathLike|hydrus_api.BinaryFileLike = None,
