@@ -111,7 +111,7 @@ class HydrusRequests:
             tags_namespace = CONF["TAGS_NAMESPACE"]
         return self.client.get_service(service_name=tags_namespace).get('service').get('service_key')
 
-    def hydrus_add_file(
+    def add_file(
             self,
             file: str|os.PathLike|hydrus_api.BinaryFileLike,
             *,
@@ -150,7 +150,7 @@ class HydrusRequests:
         self.client.add_files_to_page(page_key, hashes=[hydrus_added_file.get("hash"),])
         return hydrus_added_file
 
-    def hydrus_add_file_from_url(
+    def add_file_from_url(
             self,
             url: str,
             *,
@@ -202,7 +202,7 @@ class HydrusRequests:
             self.client.get_url_files(url).get("url_file_statuses", [])
         if url_file_statuses and url_file_statuses[0].get("status", None) == 2:
             # Файл уже есть - вручную проставленные теги сами не доимпортируются, к сожалению
-            self.hydrus_add_tags(
+            self.add_tags(
                 url_file_statuses[0].get("hash", None),
                 tags,
                 tags_namespace=tags_namespace
@@ -219,7 +219,7 @@ class HydrusRequests:
             return url_file_statuses[0]
         return {}
 
-    def hydrus_add_tags(
+    def add_tags(
             self,
             file_hash: str,
             tags: Iterable[str],
@@ -253,7 +253,7 @@ class HydrusRequests:
             service_keys_to_tags={tags_namespace_hash: self.client.clean_tags(tags).get('tags', [])}
         )
 
-    def hydrus_add_urls(self, file_hash: str, urls: Iterable[str]):
+    def add_urls(self, file_hash: str, urls: Iterable[str]):
         """Добавление к файлу ссылок
         Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_associate_url
 
@@ -314,15 +314,15 @@ class HydrusRequests:
         """
         added_file: list[dict[Literal["status", "hash", "note"], str|int]] = []
         # Добавление собственно файла в Гидрус
-        if content_file and (added_content := self.hydrus_add_file(content_file, page_name=page_name)):
+        if content_file and (added_content := self.add_file(content_file, page_name=page_name)):
             added_file.append(added_content)
             # Дописывание тегов и ссылок к файлу
-            if tags: self.hydrus_add_tags(added_content.get("hash"), tags, tags_namespace=tags_namespace)
-            if urls: self.hydrus_add_urls(added_content.get("hash"), urls)
+            if tags: self.add_tags(added_content.get("hash"), tags, tags_namespace=tags_namespace)
+            if urls: self.add_urls(added_content.get("hash"), urls)
         # Импорт файлов в Гидрус по ссылкам
         if urls:
             for url in urls:
-                if h_added_file := self.hydrus_add_file_from_url(
+                if h_added_file := self.add_file_from_url(
                     url,
                     page_name=page_name,
                     tags=tags,
