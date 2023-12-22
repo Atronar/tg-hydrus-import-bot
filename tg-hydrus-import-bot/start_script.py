@@ -7,14 +7,15 @@ import os
 import io
 
 from aiogram import Bot, Dispatcher
-from aiogram.types import BufferedInputFile, Message
+from aiogram.types import Message
 from aiogram import F
 from loguru import logger
 
 from config import CONF
 from tools import bytes_strformat, get_temp_folder
 from hydrus_requests import HydrusRequests
-from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, answer_disabled_content
+from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
+    answer_disabled_content, send_content_from_response
 
 async def start_script():
     bot = Bot(token=CONF['TG_BOT_TOKEN'])
@@ -179,26 +180,7 @@ async def start_script():
             # Отправка собственно скачанного контента
             for resp_item in resp:
                 content_file = hydrus.client.get_file(hash_=resp_item.get("hash", None))
-                content_type = content_file.headers.get("Content-Type")
-                logger.debug(f"Content-Type: {content_type}")
-                input_file = BufferedInputFile(content_file.content, resp_item.get("hash", "file"))
-                answer_kwargs = {}
-                if content_type in ("video/mp4",):
-                    answer_function = msg.answer_video
-                    answer_kwargs["supports_streaming"] = True
-                elif content_type in ("image/gif",):
-                    answer_function = msg.answer_animation
-                elif content_type.startswith("image/"):
-                    answer_function = msg.answer_photo
-                elif content_type in ("audio/mp3", "audio/m4a"):
-                    answer_function = msg.answer_audio
-                else:
-                    answer_function = msg.answer_document
-                await answer_function(
-                    input_file,
-                    reply_to_message_id=msg.message_id,
-                    **answer_kwargs
-                )
+                await send_content_from_response(content_file, msg, resp_item.get("hash", "file"))
         else:
             logger.warning(f"{msg}")
             reply = "Неизвестный тип.\n" \
