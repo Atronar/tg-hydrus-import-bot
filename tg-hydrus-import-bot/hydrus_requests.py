@@ -270,7 +270,7 @@ class HydrusRequests:
             return
         self.client.associate_url(hashes=[file_hash,], urls_to_add=urls)
 
-    def hydrus_import(
+    def import_content(
             self,
             content_file: str|os.PathLike|hydrus_api.BinaryFileLike|None = None,
             *,
@@ -333,7 +333,7 @@ class HydrusRequests:
         return added_file
 
     @staticmethod
-    def hydrus_import_resp_to_str(resp: list[dict[str, str|int]]) -> str:
+    def convert_import_resp_to_str(resp: list[dict[str, str|int]]) -> str:
         """Всего лишь метод, преобразовывающий ответ hydrus_import (в виде списка словарей),
         в человекочитаемом формате сообщения
 

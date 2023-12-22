@@ -10,7 +10,6 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import BufferedInputFile, Message
 from aiogram import F
 from loguru import logger
-import hydrus_api
 
 from config import CONF
 from tools import bytes_strformat, get_temp_folder
@@ -20,7 +19,7 @@ from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, answer_disab
 async def start_script():
     bot = Bot(token=CONF['TG_BOT_TOKEN'])
     dp = Dispatcher()
-    hydrus = hydrus_api.Client(access_key=CONF['HYDRUS_TOKEN'])
+    hydrus = HydrusRequests(CONF['HYDRUS_TOKEN'])
 
     @dp.message(F.from_user.id.in_(CONF['TG_ADMIN_ID']))
     async def message_handler(msg: Message):
@@ -41,9 +40,9 @@ async def start_script():
                 content_file
             )
 
-            resp = HydrusRequests(hydrus).hydrus_import(content_file, tags=tags, urls=urls)
+            resp = hydrus.import_content(content_file, tags=tags, urls=urls)
             logger.debug(f"{resp}")
-            resp_str = HydrusRequests.hydrus_import_resp_to_str(resp)
+            resp_str = hydrus.convert_import_resp_to_str(resp)
 
             content_file.seek(0, io.SEEK_END)
             #reply = "Тип: фото.\n" \
@@ -74,9 +73,9 @@ async def start_script():
                 content_file
             )
 
-            #resp = HydrusRequests(hydrus).hydrus_import(content_file, tags=tags, urls=urls)
+            #resp = hydrus.import_content(content_file, tags=tags, urls=urls)
             #logger.debug(f"{resp}")
-            #resp_str = HydrusRequests.hydrus_import_resp_to_str(resp)
+            #resp_str = hydrus.convert_import_resp_to_str(resp)
 
             reply = "Тип: видео.\n" \
                 f"{msg_content}\n" \
@@ -119,9 +118,9 @@ async def start_script():
                 content_file
             )
 
-            #resp = HydrusRequests(hydrus).hydrus_import(content_file, tags=tags, urls=urls)
+            #resp = hydrus.import_content(content_file, tags=tags, urls=urls)
             #logger.debug(f"{resp}")
-            #resp_str = HydrusRequests.hydrus_import_resp_to_str(resp)
+            #resp_str = hydrus.convert_import_resp_to_str(resp)
 
             reply = "Тип: аудио.\n" \
                 f"{msg_content}\n" \
@@ -153,9 +152,9 @@ async def start_script():
                 content_file
             )
 
-            #resp = HydrusRequests(hydrus).hydrus_import(content_file, tags=tags, urls=urls)
+            #resp = hydrus.import_content(content_file, tags=tags, urls=urls)
             #logger.debug(f"{resp}")
-            #resp_str = HydrusRequests.hydrus_import_resp_to_str(resp)
+            #resp_str = hydrus.convert_import_resp_to_str(resp)
 
             reply = "Тип: документ.\n" \
                 f"{msg_content}\n" \
@@ -171,15 +170,15 @@ async def start_script():
             tags = get_tags_from_msg(msg)
             urls = get_urls_from_msg(msg)
             # Скачиваем ссылки, проставляем теги ко всем ним
-            resp = HydrusRequests(hydrus).hydrus_import(urls=urls, tags=tags)
+            resp = hydrus.import_content(urls=urls, tags=tags)
 
             logger.debug(f"{resp}")
-            resp_str = HydrusRequests.hydrus_import_resp_to_str(resp)
+            resp_str = hydrus.convert_import_resp_to_str(resp)
             reply = "Тип: текст.\n" \
                 f"{resp_str}"
             # Отправка собственно скачанного контента
             for resp_item in resp:
-                content_file = hydrus.get_file(hash_=resp_item.get("hash", None))
+                content_file = hydrus.client.get_file(hash_=resp_item.get("hash", None))
                 content_type = content_file.headers.get("Content-Type")
                 logger.debug(f"Content-Type: {content_type}")
                 input_file = BufferedInputFile(content_file.content, resp_item.get("hash", "file"))
