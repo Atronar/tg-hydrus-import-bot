@@ -35,7 +35,7 @@ def prepare_temp_folder():
         for root, _, files in os.walk(temp_path):
             for file in files:
                 os.remove(os.path.join(root, file))
-        logger.info(f"Временные файлы удалены")
+        logger.info("Временные файлы удалены")
     else:
         os.makedirs(temp_path)
         logger.info(f"Создана папка временных файлов по пути {temp_path}")

@@ -7,7 +7,6 @@ import asyncio
 
 from loguru import logger
 
-from config import CONF
 from start_script import start_script
 from tools import prepare_temp_folder
 

@@ -3,9 +3,18 @@
 """
 
 import json
-from typing import Any
+from typing import Any, Literal
 
-CONF: dict[str, Any] = {}
+CONF: dict[Literal[
+    "TG_ADMIN_ID",
+    "TG_BOT_TOKEN",
+    "HYDRUS_TOKEN",
+    "TIME_TO_SLEEP",
+    "TAGS_NAMESPACE",
+    "DESTINATION_PAGE_NAME",
+    "TEMP_PATH",
+    "CONTENT_TYPES",
+], Any] = {}
 """ Global configuration variable """
 
 __CONFPATH = ".conf.json"
