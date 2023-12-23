@@ -234,9 +234,13 @@ class HydrusRequests:
         # Создание принимаемого словаря добавляемых тегов
         # в пространстве для service_keys_to_additional_tags
         if tags:
-            tags_namespace_hash = self.get_tags_namespace_hash(tags_namespace)
-            # note: clean_tags возвращает не list[str], а {'tags': list[str], ...}
-            additional_tags = {tags_namespace_hash: self.client.clean_tags(tags).get('tags', [])}
+            # service_keys_to_additional_tags требует права на работу с тегами
+            if self.check_permission(HydrusPermission.TAGS_EDIT):
+                tags_namespace_hash = self.get_tags_namespace_hash(tags_namespace)
+                # note: clean_tags возвращает не list[str], а {'tags': list[str], ...}
+                additional_tags = {tags_namespace_hash: self.client.clean_tags(tags).get('tags', [])}
+            else:
+                logger.warning('Отсутствует доступ "edit file tags"')
         # Проверяем существование контента — к ранее добавленным файлам дополнительно указанные
         # в service_keys_to_additional_tags теги не добавятся, только вытащенные
         # из импорта по ссылке поэтому добавляем их вручную
@@ -283,6 +287,10 @@ class HydrusRequests:
             Название тегового пространства, в которое запишутся теги
             Если None, то берётся из конфига "DESTINATION_PAGE_NAME"
         """
+        # Без прав на работу с тегами не имеет смысла
+        if not self.check_permission(HydrusPermission.TAGS_EDIT):
+            logger.warning('Отсутствует доступ "edit file tags"')
+            return
         # Как бы то ни было, пустые хэш и теги бессмысленны
         if not file_hash or not tags:
             return
