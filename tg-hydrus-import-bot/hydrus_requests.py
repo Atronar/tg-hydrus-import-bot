@@ -60,6 +60,10 @@ class HydrusRequests:
         }
         logger.debug(self.permissions)
         return self.permissions
+    
+    def check_permission(self, permission: int|HydrusPermission) -> bool:
+        """Проверка наличия права доступа"""
+        return permission in self.permissions
 
     def get_page_hash_by_name(
             self,
@@ -398,7 +402,7 @@ class HydrusRequests:
             Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#get_files_file
         """
         # Проверка доступа и хэша
-        if (HydrusPermission.FILES_SEARCH_FETCH not in self.permissions) or not file_hash:
+        if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH) or not file_hash:
             logger.warning('Отсутствует доступ "search and fetch files"')
             return None
         return self.client.get_file(hash_=file_hash)
