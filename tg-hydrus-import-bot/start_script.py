@@ -176,11 +176,11 @@ async def start_script():
             # Отправка собственно скачанного контента
             content_size = []
             for resp_item in resp:
-                content_file = hydrus.client.get_file(hash_=resp_item.get("hash", None))
-                if (content_size_item := content_file.headers.get("Content-Length")) \
-                and content_size_item.isdecimal():
-                    content_size.append(int(content_size_item))
-                await send_content_from_response(content_file, msg, resp_item.get("hash", "file"))
+                if content_file := hydrus.get_file(resp_item.get("hash", None)):
+                    if (content_size_item := content_file.headers.get("Content-Length")) \
+                    and content_size_item.isdecimal():
+                        content_size.append(int(content_size_item))
+                    await send_content_from_response(content_file, msg, resp_item.get("hash", "file"))
 
             reply = get_success_reply_str(
                 "текст",

@@ -382,3 +382,23 @@ class HydrusRequests:
             )
             for resp_item in resp
         )
+
+    def get_file(self, file_hash: str):
+        """Получение файла по хэшу
+
+        Parameters
+        ----------
+        file_hash : str
+            Хэш-ключ однозначно определяющий файл, к которому добавляются ссылки
+
+        Returns
+        -------
+        Response | None
+            http-ответ, содержащий сам файл
+            Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#get_files_file
+        """
+        # Проверка доступа и хэша
+        if (HydrusPermission.FILES_SEARCH_FETCH not in self.permissions) or not file_hash:
+            logger.warning('Отсутствует доступ "search and fetch files"')
+            return None
+        return self.client.get_file(hash_=file_hash)
