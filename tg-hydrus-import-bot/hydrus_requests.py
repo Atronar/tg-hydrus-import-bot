@@ -88,9 +88,14 @@ class HydrusRequests:
         str
             Хэш-ключ, однозначно идентифицирующий страницу, по которому осуществляется доступ к ней
         """
-        is_root = False
+        # Без прав на страницы не имеет смысла
+        if not self.check_permission(HydrusPermission.PAGES):
+            logger.warning('Отсутствует доступ "manage pages"')
+            return None
+
         # Если страницы не переданы, значит мы в корне
         # и следует получить список всех открытых страниц
+        is_root = False
         if pages is None:
             # get_pages() возвращает словарь вида {'pages':{'pages': [список страниц в корне]}}
             pages = self.client.get_pages().get('pages',{}).get('pages',())
