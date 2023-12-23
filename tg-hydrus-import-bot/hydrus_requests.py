@@ -223,6 +223,10 @@ class HydrusRequests:
             Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_get_url_files
             (первый элемент "url_file_statuses")
         """
+        # Без прав на работу со ссылками не имеет смысла
+        if not self.check_permission(HydrusPermission.URL_IMPORT_EDIT):
+            logger.warning('Отсутствует доступ "import and edit urls"')
+            return {}
         # Страница в клиенте, на которую добавится импорт
         if page_name is None:
             page_name = CONF["DESTINATION_PAGE_NAME"]
@@ -303,6 +307,10 @@ class HydrusRequests:
         urls : Iterable[str]
             Добавляемые к файлу ссылки
         """
+        # Без прав на работу со ссылками не имеет смысла
+        if not self.check_permission(HydrusPermission.URL_IMPORT_EDIT):
+            logger.warning('Отсутствует доступ "import and edit urls"')
+            return
         # Как бы то ни было, пустые хэш и ссылки бессмысленны
         if not file_hash or not urls:
             return
