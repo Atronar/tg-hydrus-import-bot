@@ -74,9 +74,9 @@ async def start_script():
                 content_file
             )
 
-            #resp = hydrus.import_content(content_file, tags=tags, urls=urls)
-            #logger.debug(f"{resp}")
-            #resp_str = hydrus.convert_import_resp_to_str(resp)
+            resp = hydrus.import_content(content_file, tags=tags, urls=urls)
+            logger.debug(f"{resp}")
+            resp_str = hydrus.convert_import_resp_to_str(resp)
 
             reply = "Тип: видео.\n" \
                 f"{msg_content}\n" \
@@ -119,9 +119,9 @@ async def start_script():
                 content_file
             )
 
-            #resp = hydrus.import_content(content_file, tags=tags, urls=urls)
-            #logger.debug(f"{resp}")
-            #resp_str = hydrus.convert_import_resp_to_str(resp)
+            resp = hydrus.import_content(content_file, tags=tags, urls=urls)
+            logger.debug(f"{resp}")
+            resp_str = hydrus.convert_import_resp_to_str(resp)
 
             reply = "Тип: аудио.\n" \
                 f"{msg_content}\n" \
@@ -153,9 +153,9 @@ async def start_script():
                 content_file
             )
 
-            #resp = hydrus.import_content(content_file, tags=tags, urls=urls)
-            #logger.debug(f"{resp}")
-            #resp_str = hydrus.convert_import_resp_to_str(resp)
+            resp = hydrus.import_content(content_file, tags=tags, urls=urls)
+            logger.debug(f"{resp}")
+            resp_str = hydrus.convert_import_resp_to_str(resp)
 
             reply = "Тип: документ.\n" \
                 f"{msg_content}\n" \
