@@ -2,12 +2,13 @@
 Модуль связанный с обработкой и запросами к телеграму
 """
 import re
+from typing import Iterable
 from requests import Response
 
 from aiogram.types import BufferedInputFile, Message, MessageEntity
 from loguru import logger
 
-from tools import camelCase_to_snake_case
+from tools import camelCase_to_snake_case, bytes_strformat
 
 def get_tags_from_msg(msg: Message) -> list[str]:
     """Достаёт из объекта сообщения телеграм список хештегов,
@@ -79,3 +80,19 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
         reply_to_message_id=msg.message_id,
         **answer_kwargs
     )
+
+def get_success_reply_str(
+        type_content_name: str,
+        resp_str: str,
+        content_size: int|Iterable[int]|None = None
+    ) -> str:
+    """Генерация строки с успешным импортом
+    """
+    reply = f"Тип: {type_content_name}.\n" \
+        f"{resp_str}"
+    if isinstance(content_size, int):
+        reply = f"{reply}\n{bytes_strformat(content_size)}"
+    elif isinstance(content_size, Iterable):
+        for content_size_item in content_size:
+            reply = f"{reply}\n{bytes_strformat(content_size_item)}"
+    return reply

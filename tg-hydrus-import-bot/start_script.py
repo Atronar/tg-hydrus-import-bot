@@ -12,10 +12,10 @@ from aiogram import F
 from loguru import logger
 
 from config import CONF
-from tools import bytes_strformat, get_temp_folder
+from tools import get_temp_folder
 from hydrus_requests import HydrusRequests
 from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
-    answer_disabled_content, send_content_from_response
+    answer_disabled_content, send_content_from_response, get_success_reply_str
 
 async def start_script():
     bot = Bot(token=CONF['TG_BOT_TOKEN'])
@@ -46,12 +46,12 @@ async def start_script():
             resp_str = hydrus.convert_import_resp_to_str(resp)
 
             content_file.seek(0, io.SEEK_END)
-            #reply = "Тип: фото.\n" \
-            #    f"{msg_content}\n" \
-            #    f"{bytes_strformat(content_file.tell())}"
-            reply = "Тип: фото.\n" \
-                f"{resp_str}\n" \
-                f"{bytes_strformat(content_file.tell())}"
+
+            reply = get_success_reply_str(
+                "фото",
+                resp_str,
+                content_size=content_file.tell()
+            )
         elif msg_content := (msg.video or msg.animation or msg.video_note):
             if not ((msg.video and "video" in CONF["CONTENT_TYPES"]) \
                 or (msg.animation and "animation" in CONF["CONTENT_TYPES"]) \
@@ -78,12 +78,11 @@ async def start_script():
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
 
-            reply = "Тип: видео.\n" \
-                f"{msg_content}\n" \
-                f"{bytes_strformat(os.path.getsize(content_file))}"
-            # reply = "Тип: видео.\n" \
-            #     f"{resp_str}\n" \
-            #     f"{bytes_strformat(os.path.getsize(content_file))}"
+            reply = get_success_reply_str(
+                "видео",
+                resp_str,
+                content_size=os.path.getsize(content_file)
+            )
         # elif msg_content := msg.animation:
         #    if not (msg.animation and "animation" in CONF["CONTENT_TYPES"]):
         #        await answer_disabled_content(msg, type(msg_content).__name__)
@@ -123,12 +122,11 @@ async def start_script():
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
 
-            reply = "Тип: аудио.\n" \
-                f"{msg_content}\n" \
-                f"{bytes_strformat(os.path.getsize(content_file))}"
-            # reply = "Тип: аудио.\n" \
-            #     f"{resp_str}\n" \
-            #     f"{bytes_strformat(os.path.getsize(content_file))}"
+            reply = get_success_reply_str(
+                "аудио",
+                resp_str,
+                content_size=os.path.getsize(content_file)
+            )
         # elif msg_content := msg.voice:
         #    if not (msg.voice and "voice" in CONF["CONTENT_TYPES"]):
         #        await answer_disabled_content(msg, type(msg_content).__name__)
@@ -157,12 +155,11 @@ async def start_script():
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
 
-            reply = "Тип: документ.\n" \
-                f"{msg_content}\n" \
-                f"{bytes_strformat(os.path.getsize(content_file))}"
-            # reply = "Тип: документ.\n" \
-            #     f"{resp_str}\n" \
-            #     f"{bytes_strformat(os.path.getsize(content_file))}"
+            reply = get_success_reply_str(
+                "документ",
+                resp_str,
+                content_size=os.path.getsize(content_file)
+            )
         elif msg.text:
             if not (msg.text and "text" in CONF["CONTENT_TYPES"]):
                 await answer_disabled_content(msg, "text")
@@ -175,12 +172,21 @@ async def start_script():
 
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
-            reply = "Тип: текст.\n" \
-                f"{resp_str}"
+
             # Отправка собственно скачанного контента
+            content_size = []
             for resp_item in resp:
                 content_file = hydrus.client.get_file(hash_=resp_item.get("hash", None))
+                if (content_size_item := content_file.headers.get("Content-Length")) \
+                and content_size_item.isdecimal():
+                    content_size.append(int(content_size_item))
                 await send_content_from_response(content_file, msg, resp_item.get("hash", "file"))
+
+            reply = get_success_reply_str(
+                "текст",
+                resp_str,
+                content_size=content_size
+            )
         else:
             logger.warning(f"{msg}")
             reply = "Неизвестный тип.\n" \
