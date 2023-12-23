@@ -10,7 +10,7 @@ from loguru import logger
 from tools import camelCase_to_snake_case
 
 def get_tags_from_msg(msg: Message) -> list[str]:
-    """Достаёт из объекта сообщения телеграм список хештегов, 
+    """Достаёт из объекта сообщения телеграм список хештегов,
     заменяя подчёркивания на пробелы и отрезая символ #
     """
     if msg.caption is not None:

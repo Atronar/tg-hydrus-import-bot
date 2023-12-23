@@ -13,9 +13,9 @@ class HumanBytes:
     BINARY_LABELS: List[str] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"]
     PRECISION_OFFSETS: List[float] = [0.5, 0.05, 0.005, 0.0005] # PREDEFINED FOR SPEED.
     PRECISION_FORMATS: List[str] = [
-        "{}{:.0f} {}", 
-        "{}{:.1f} {}", 
-        "{}{:.2f} {}", 
+        "{}{:.0f} {}",
+        "{}{:.1f} {}",
+        "{}{:.2f} {}",
         "{}{:.3f} {}"
     ] # PREDEFINED FOR SPEED.
 
