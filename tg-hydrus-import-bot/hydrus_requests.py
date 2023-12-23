@@ -1,6 +1,7 @@
 ﻿"""
 Модуль связанный с запросами к Гидрусу
 """
+from enum import IntEnum
 import os
 from typing import Any, Iterable, Literal
 import hydrus_api
@@ -8,6 +9,19 @@ from loguru import logger
 
 from config import CONF
 
+
+class HydrusPermission(IntEnum):
+    URL_IMPORT_EDIT = 0
+    FILES_IMPORT_DELETE = 1
+    TAGS_EDIT = 2
+    FILES_SEARCH_FETCH = 3
+    PAGES = 4
+    COOKIES_HEADERS = 5
+    DATABASE = 6
+    NOTES_EDIT = 7
+    RELATIONSHIPS_EDIT = 8
+    RATINGS_EDIT = 9
+    POPUPS = 10
 
 class HydrusRequests:
     """Основной класс модуля
@@ -21,6 +35,7 @@ class HydrusRequests:
     """
     def __init__(self, hydrus: hydrus_api.Client|str):
         self.set_client(hydrus)
+        self.get_permission_info()
 
     def set_client(self, hydrus: hydrus_api.Client|str):
         """Установка значения клиента
@@ -35,6 +50,16 @@ class HydrusRequests:
             self.client = hydrus_api.Client(access_key=hydrus)
         else:
             self.client = hydrus
+
+    def get_permission_info(self) -> set[HydrusPermission]:
+        """Получение списка разрешений"""
+        self.permission_info = self.client.verify_access_key()
+        self.permissions = {
+            HydrusPermission(permission)
+            for permission in self.permission_info.get('basic_permissions')
+        }
+        logger.debug(self.permissions)
+        return self.permissions
 
     def get_page_hash_by_name(
             self,
