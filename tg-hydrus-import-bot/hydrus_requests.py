@@ -171,6 +171,10 @@ class HydrusRequests:
             Возвращается ответ добавления файла, содержащий число status и строки hash и note
             Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#add_files_add_file
         """
+        # Без наличия права на добавление не имеет смысла
+        if not self.check_permission(HydrusPermission.FILES_IMPORT_DELETE):
+            logger.warning('Отсутствует доступ "import and delete files"')
+            return {}    
         # Добавление файла в Гидрус
         hydrus_added_file = self.client.add_file(file)
         # Берём ключ страницы по имени
