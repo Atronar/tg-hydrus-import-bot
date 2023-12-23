@@ -407,7 +407,9 @@ class HydrusRequests:
             Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#get_files_file
         """
         # Проверка доступа и хэша
-        if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH) or not file_hash:
+        if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH):
             logger.warning('Отсутствует доступ "search and fetch files"')
+            return None
+        if not file_hash:
             return None
         return self.client.get_file(hash_=file_hash)
