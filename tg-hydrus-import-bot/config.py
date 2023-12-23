@@ -6,6 +6,8 @@ import json
 from typing import Any, Literal
 
 CONF: dict[Literal[
+    "LOG_LEVEL",
+    "LOG_PATH",
     "TG_ADMIN_ID",
     "TG_BOT_TOKEN",
     "HYDRUS_TOKEN",

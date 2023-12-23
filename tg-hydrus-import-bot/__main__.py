@@ -9,17 +9,22 @@ from loguru import logger
 
 from start_script import start_script
 from tools import prepare_temp_folder
+from config import CONF
 
+logger.remove()
 logger.add(
-    "./logs/debug.log",
+    sys.stderr,
+    level=CONF["LOG_LEVEL"]
+)
+logger.add(
+    CONF["LOG_PATH"],
     format="{time} {level} {message}",
-    level="DEBUG",
+    level=CONF["LOG_LEVEL"],
     rotation="1 week",
     compression="zip",
 )
 
 logger.info("Программа запущена.")
-
 
 @logger.catch
 def main():
