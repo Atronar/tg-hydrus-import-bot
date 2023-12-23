@@ -60,7 +60,7 @@ class HydrusRequests:
         }
         logger.debug(self.permissions)
         return self.permissions
-    
+
     def check_permission(self, permission: int|HydrusPermission) -> bool:
         """Проверка наличия права доступа"""
         return permission in self.permissions
@@ -127,7 +127,7 @@ class HydrusRequests:
         # Мы ничего не нашли, но ещё не в корне — сообщаем наверх продолжать искать
         return None
 
-    def get_tags_namespace_hash(self, tags_namespace: str|None = None) -> str:
+    def get_tags_namespace_hash(self, tags_namespace: str|None = None) -> str|None:
         """Получение ключа пространства тегов по его названию
 
         Parameters
@@ -141,8 +141,27 @@ class HydrusRequests:
         str
             Непосредственно хэш-ключ, однозначно определяющий теговое пространство в Гидрусе
         """
+        # Необходимо одно из прав доступа
+        if not (
+            {
+                HydrusPermission.FILES_IMPORT_DELETE,
+                HydrusPermission.TAGS_EDIT,
+                HydrusPermission.PAGES,
+                HydrusPermission.FILES_SEARCH_FETCH
+            } & self.permissions
+        ):
+            logger.warning(
+                'Требуется одно из прав доступа: '
+                '"import and delete files", '
+                '"edit file tags", '
+                '"manage pages", '
+                '"search and fetch files"'
+            )
+            return None
         if tags_namespace is None:
             tags_namespace = CONF["TAGS_NAMESPACE"]
+        if not tags_namespace:
+            return None
         return self.client.get_service(service_name=tags_namespace).get('service').get('service_key')
 
     def add_file(
@@ -174,7 +193,7 @@ class HydrusRequests:
         # Без наличия права на добавление не имеет смысла
         if not self.check_permission(HydrusPermission.FILES_IMPORT_DELETE):
             logger.warning('Отсутствует доступ "import and delete files"')
-            return {}    
+            return {}
         # Добавление файла в Гидрус
         hydrus_added_file = self.client.add_file(file)
         # Берём ключ страницы по имени
@@ -236,9 +255,9 @@ class HydrusRequests:
         if tags:
             # service_keys_to_additional_tags требует права на работу с тегами
             if self.check_permission(HydrusPermission.TAGS_EDIT):
-                tags_namespace_hash = self.get_tags_namespace_hash(tags_namespace)
-                # note: clean_tags возвращает не list[str], а {'tags': list[str], ...}
-                additional_tags = {tags_namespace_hash: self.client.clean_tags(tags).get('tags', [])}
+                if tags_namespace_hash := self.get_tags_namespace_hash(tags_namespace):
+                    # note: clean_tags возвращает не list[str], а {'tags': list[str], ...}
+                    additional_tags = {tags_namespace_hash: self.client.clean_tags(tags).get('tags', [])}
             else:
                 logger.warning('Отсутствует доступ "edit file tags"')
         # Проверяем существование контента — к ранее добавленным файлам дополнительно указанные
@@ -294,13 +313,16 @@ class HydrusRequests:
         # Как бы то ни было, пустые хэш и теги бессмысленны
         if not file_hash or not tags:
             return
+
+        additional_tags = None
         # Получаем пространство тегов
-        tags_namespace_hash = self.get_tags_namespace_hash(tags_namespace)
+        if tags_namespace_hash := self.get_tags_namespace_hash(tags_namespace):
+            additional_tags = {tags_namespace_hash: self.client.clean_tags(tags).get('tags', [])}
         # И добавляем теги
         # note: clean_tags возвращает не list[str], а {'tags': list[str], ...}
         self.client.add_tags(
             hashes=[file_hash,],
-            service_keys_to_tags={tags_namespace_hash: self.client.clean_tags(tags).get('tags', [])}
+            service_keys_to_tags=additional_tags
         )
 
     def add_urls(self, file_hash: str, urls: Iterable[str]):
