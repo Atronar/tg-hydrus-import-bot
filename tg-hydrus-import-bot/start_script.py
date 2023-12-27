@@ -20,7 +20,7 @@ from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
 async def start_script():
     bot = Bot(token=CONF['TG_BOT_TOKEN'])
     dp = Dispatcher()
-    hydrus = HydrusRequests(CONF['HYDRUS_TOKEN'])
+    hydrus = HydrusRequests(CONF['HYDRUS_TOKEN'], api_url=CONF['HYDRUS_API_URL'])
 
     @dp.message(F.from_user.id.in_(CONF['TG_ADMIN_ID']))
     async def message_handler(msg: Message):

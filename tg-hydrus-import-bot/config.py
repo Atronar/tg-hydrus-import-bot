@@ -11,6 +11,7 @@ CONF: dict[Literal[
     "TG_ADMIN_ID",
     "TG_BOT_TOKEN",
     "HYDRUS_TOKEN",
+    "HYDRUS_API_URL",
     "TIME_TO_SLEEP",
     "TAGS_NAMESPACE",
     "DESTINATION_PAGE_NAME",

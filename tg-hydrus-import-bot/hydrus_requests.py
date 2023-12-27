@@ -32,12 +32,16 @@ class HydrusRequests:
     hydrus : hydrus_api.Client | str
         Либо уже готовый объект клиента, который и будет использоваться,
         либо токен, по которому и будет создан объект клиента
+        
+    api_url : str
+        Адрес, по которому осуществляется доступ к API
+        Если пуст, то используется адрес клиента по умолчанию
     """
-    def __init__(self, hydrus: hydrus_api.Client|str):
-        self.set_client(hydrus)
+    def __init__(self, hydrus: hydrus_api.Client|str, *, api_url: str|None = None):
+        self.set_client(hydrus, api_url=api_url)
         self.get_permission_info()
 
-    def set_client(self, hydrus: hydrus_api.Client|str):
+    def set_client(self, hydrus: hydrus_api.Client|str, *, api_url: str|None = None):
         """Установка значения клиента
 
         Parameters
@@ -45,9 +49,15 @@ class HydrusRequests:
         hydrus : hydrus_api.Client | str
             Либо уже готовый объект клиента,
             либо токен, по которому и будет создан объект клиента
+        
+        api_url : str
+            Адрес, по которому осуществляется доступ к API
+            Если пуст, то используется адрес клиента по умолчанию
         """
         if isinstance(hydrus, str):
-            self.client = hydrus_api.Client(access_key=hydrus)
+            if not api_url:
+                api_url = hydrus_api.DEFAULT_API_URL
+            self.client = hydrus_api.Client(access_key=hydrus, api_url=api_url)
         else:
             self.client = hydrus
 
