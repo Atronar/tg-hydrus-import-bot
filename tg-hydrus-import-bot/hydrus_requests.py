@@ -7,8 +7,6 @@ from typing import Any, Iterable, Literal
 import hydrus_api
 from loguru import logger
 
-from config import CONF
-
 
 class HydrusPermission(IntEnum):
     URL_IMPORT_EDIT = 0
@@ -36,9 +34,24 @@ class HydrusRequests:
     api_url : str
         Адрес, по которому осуществляется доступ к API
         Если пуст, то используется адрес клиента по умолчанию
+        
+    default_tags_namespace : str
+        Теговое пространство, которое будет использоваться по умолчанию
+        
+    default_destination_page_name : str
+        Страница в клиенте, на которую будут выводиться результаты импорта по умолчанию
     """
-    def __init__(self, hydrus: hydrus_api.Client|str, *, api_url: str|None = None):
+    def __init__(
+            self,
+            hydrus: hydrus_api.Client|str,
+            *,
+            api_url: str|None = None,
+            default_tags_namespace: str|None = None,
+            default_destination_page_name: str|None = None
+        ):
         self.set_client(hydrus, api_url=api_url)
+        self.set_default_tags_namespace(default_tags_namespace)
+        self.set_default_destination_page_name(default_destination_page_name)
         self.get_permission_info()
 
     def set_client(self, hydrus: hydrus_api.Client|str, *, api_url: str|None = None):
@@ -60,6 +73,14 @@ class HydrusRequests:
             self.client = hydrus_api.Client(access_key=hydrus, api_url=api_url)
         else:
             self.client = hydrus
+
+    def set_default_tags_namespace(self, tags_namespace: str|None):
+        """Установка тегового пространства по умолчанию"""
+        self.default_tags_namespace = tags_namespace
+
+    def set_default_destination_page_name(self, destination_page_name: str|None):
+        """Установка страницы назначения импорта по умолчанию"""
+        self.destination_page_name = destination_page_name
 
     def get_permission_info(self) -> set[HydrusPermission]:
         """Получение списка разрешений"""
@@ -169,7 +190,7 @@ class HydrusRequests:
             )
             return None
         if tags_namespace is None:
-            tags_namespace = CONF["TAGS_NAMESPACE"]
+            tags_namespace = self.default_tags_namespace
         if not tags_namespace:
             return None
         return self.client.get_service(service_name=tags_namespace).get('service').get('service_key')
@@ -208,7 +229,7 @@ class HydrusRequests:
         hydrus_added_file = self.client.add_file(file)
         # Берём ключ страницы по имени
         if page_name is None:
-            page_name = CONF["DESTINATION_PAGE_NAME"]
+            page_name = self.destination_page_name
         page_key = self.get_page_hash_by_name(page_name)
         # page_key не возвращается, если страницы нет — например конфиг пустой.
         if not page_key:
@@ -258,7 +279,7 @@ class HydrusRequests:
             return {}
         # Страница в клиенте, на которую добавится импорт
         if page_name is None:
-            page_name = CONF["DESTINATION_PAGE_NAME"]
+            page_name = self.destination_page_name
         additional_tags = None
         # Создание принимаемого словаря добавляемых тегов
         # в пространстве для service_keys_to_additional_tags
