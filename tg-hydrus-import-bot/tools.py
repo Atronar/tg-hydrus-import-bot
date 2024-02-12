@@ -91,12 +91,12 @@ def make_safe_filename(filename: str) -> str:
         'LST', 'KEYBD$', 'SCREEN$', '$IDLE$', 'CONFIG$'
     }
     if os.path.splitext(filename)[0].upper() in reserved_words: return f"__{filename}"
-    if set(filename)=={'.'}: return filename.replace('.', '\uff0e', 1)
+    if set(filename)=={'.'}: return filename.replace('.', '\uff0e')
     return "".join(
         chr(ord(c)+65248) if c in illegal_chars else c
         for c in filename
         if c not in illegal_unprintable
-    ).rstrip()
+    ).rstrip().rstrip('.')
 
 def bytes_strformat(num: int|float) -> str:
     return HumanBytes.format(num)
