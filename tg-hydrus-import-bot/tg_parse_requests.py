@@ -32,8 +32,12 @@ def get_tags_from_str(msg: str) -> list[str]:
 def get_urls_from_msg(msg: Message) -> list[str]:
     """Достаёт из объекта сообщения телеграм список ссылок"""
     if msg.caption_entities is not None:
+        if msg.caption is None:
+            raise ValueError(msg)
         return get_urls_from_entities(msg.caption, msg.caption_entities)
     if msg.entities is not None:
+        if msg.text is None:
+            raise ValueError(msg)
         return get_urls_from_entities(msg.text, msg.entities)
     return []
 
@@ -60,7 +64,7 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
     """Отправка содержимого результата запроса (из Гидруса) в Телеграм,
     основываясь на его Content-Type
     """
-    content_type = content_file.headers.get("Content-Type")
+    content_type = content_file.headers.get("Content-Type", "")
     logger.debug(f"Content-Type: {content_type}")
     input_file = BufferedInputFile(content_file.content, filename)
     answer_kwargs = {}
