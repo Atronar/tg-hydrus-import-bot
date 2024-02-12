@@ -1,25 +1,12 @@
 ﻿"""
 Модуль связанный с запросами к Гидрусу
 """
-from enum import IntEnum
 import os
 from typing import Any, Iterable, Literal
 import hydrus_api
 from loguru import logger
+from hydrus_api_enums import HydrusPermission
 
-
-class HydrusPermission(IntEnum):
-    URL_IMPORT_EDIT = 0
-    FILES_IMPORT_DELETE = 1
-    TAGS_EDIT = 2
-    FILES_SEARCH_FETCH = 3
-    PAGES = 4
-    COOKIES_HEADERS = 5
-    DATABASE = 6
-    NOTES_EDIT = 7
-    RELATIONSHIPS_EDIT = 8
-    RATINGS_EDIT = 9
-    POPUPS = 10
 
 class HydrusRequests:
     """Основной класс модуля
