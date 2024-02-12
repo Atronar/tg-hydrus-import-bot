@@ -8,7 +8,7 @@ from requests import Response
 from aiogram.types import BufferedInputFile, Message, MessageEntity
 from loguru import logger
 
-from tools import camelCase_to_snake_case, bytes_strformat
+from tools import camelCase_to_snake_case, bytes_strformat, url_with_schema
 
 def get_tags_from_msg(msg: Message) -> list[str]:
     """Достаёт из объекта сообщения телеграм список хештегов,
@@ -46,9 +46,17 @@ def get_urls_from_entities(msg: str, entities: list[MessageEntity]) -> list[str]
     urls = []
     for entity in entities:
         if entity.type in ("text_link") and entity.url:
-            urls.append(entity.url)
+            urls.append(
+                url_with_schema(
+                    entity.url
+                )
+            )
         elif entity.type in ("url"):
-            urls.append(msg[entity.offset:entity.offset+entity.length])
+            urls.append(
+                url_with_schema(
+                    msg[entity.offset:entity.offset+entity.length]
+                )
+            )
     if urls:
         logger.debug(f"Ссылки: {urls}")
     return urls

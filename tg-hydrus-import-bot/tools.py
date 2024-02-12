@@ -55,6 +55,21 @@ def split_text(text: str, fragment_size: int) -> list:
         fragments.append(text[fragment : fragment + fragment_size])
     return fragments
 
+def url_with_schema(url: str) -> str:
+    # В наиболее частых случаях не нужно напрягать регулярку
+    # https://url.example -> https://url.example
+    if url.startswith("https://") or url.startswith("http://"):
+        return url
+    # //url.example -> https://url.example
+    elif url.startswith("//"):
+        return f"https:{url}"
+    # ftp://url.example -> ftp://url.example
+    elif re.match(r"\w+://", url):
+        return url
+    # url.example -> https://url.example
+    else:
+        return f"https://{url}"
+
 
 def make_safe_filename(filename: str) -> str:
     """
