@@ -10,6 +10,9 @@ from loguru import logger
 
 from tools import camelCase_to_snake_case, bytes_strformat, url_with_schema
 
+MAX_FILE_SIZE = 50000000 # 50 Mb
+MAX_PHOTO_SIZE = 10000000 # 10 Mb
+
 def get_tags_from_msg(msg: Message) -> list[str]:
     """Достаёт из объекта сообщения телеграм список хештегов,
     заменяя подчёркивания на пробелы и отрезая символ #
@@ -74,6 +77,10 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
     """
     content_type = content_file.headers.get("Content-Type", "")
     logger.debug(f"Content-Type: {content_type}")
+    content_length = int(content_file.headers.get("Content-Length", "0"))
+    logger.debug(f"Content-Length: {content_length}")
+    if content_length > MAX_FILE_SIZE:
+        return None
     input_file = BufferedInputFile(content_file.content, filename)
     answer_kwargs = {}
     if content_type in ("video/mp4",):
@@ -82,6 +89,8 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
     elif content_type in ("image/gif",):
         answer_function = msg.answer_animation
     elif content_type.startswith("image/"):
+        if content_length > MAX_PHOTO_SIZE:
+            return None
         answer_function = msg.answer_photo
     elif content_type in ("audio/mp3", "audio/m4a"):
         answer_function = msg.answer_audio
