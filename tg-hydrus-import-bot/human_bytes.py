@@ -3,24 +3,22 @@
 https://stackoverflow.com/a/63839503
 """
 
-from typing import List, Union
-
 class HumanBytes:
     """Предполагается использовать единственную функцию format
     Константы позволяют модифицировать класс через создание дочерних
     """
-    METRIC_LABELS: List[str] = ["B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"]
-    BINARY_LABELS: List[str] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"]
-    PRECISION_OFFSETS: List[float] = [0.5, 0.05, 0.005, 0.0005] # PREDEFINED FOR SPEED.
-    PRECISION_FORMATS: List[str] = [
+    METRIC_LABELS: tuple[str, ...] = ("B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+    BINARY_LABELS: tuple[str, ...] = ("B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB")
+    PRECISION_OFFSETS: tuple[float, ...] = (0.5, 0.05, 0.005, 0.0005) # PREDEFINED FOR SPEED.
+    PRECISION_FORMATS: tuple[str, ...] = (
         "{}{:.0f} {}",
         "{}{:.1f} {}",
         "{}{:.2f} {}",
         "{}{:.3f} {}"
-    ] # PREDEFINED FOR SPEED.
+    ) # PREDEFINED FOR SPEED.
 
     @staticmethod
-    def format(num: Union[int, float], metric: bool=False, precision: int=1) -> str:
+    def format(num: int|float, metric: bool=False, precision: int=1) -> str:
         """
         Human-readable formatting of bytes, using binary (powers of 1024)
         or metric (powers of 1000) representation.
@@ -39,6 +37,7 @@ class HumanBytes:
         if is_negative: # Faster than ternary assignment or always running abs().
             num = abs(num)
 
+        unit = unit_labels[0]
         for unit in unit_labels:
             if num < unit_step_thresh:
                 # VERY IMPORTANT:
