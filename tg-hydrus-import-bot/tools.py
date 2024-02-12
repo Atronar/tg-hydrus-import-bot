@@ -6,29 +6,6 @@ from human_bytes import HumanBytes
 from config import CONF
 
 
-def blacklist_check(blacklist: list, text: str) -> bool:
-    if blacklist:
-        text_lower = text.lower()
-        for black_word in blacklist:
-            if black_word.lower() in text_lower:
-                logger.info(f"Post was skipped due to the detection of blacklisted word: {black_word}.")
-                return True
-
-    return False
-
-
-def whitelist_check(whitelist: list, text: str) -> bool:
-    if whitelist:
-        text_lower = text.lower()
-        for white_word in whitelist:
-            if white_word.lower() in text_lower:
-                return False
-        logger.info("The post was skipped because no whitelist words were found.")
-        return True
-
-    return False
-
-
 def prepare_temp_folder():
     temp_path = CONF["TEMP_PATH"]
     if os.path.exists(temp_path):
@@ -46,11 +23,13 @@ def get_temp_folder() -> str:
 
 
 def prepare_text_for_html(text: str) -> str:
-    return text \
-        .replace("&", "&amp;") \
-        .replace("<", "&lt;") \
-        .replace(">", "&gt;") \
+    return (
+        text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
         .replace('"', "&quot;")
+    )
 
 
 def add_urls_to_text(text: str, urls: list, videos: list) -> str:
