@@ -126,6 +126,8 @@ class HydrusRequests:
                 self.client.get_pages()
             ).get('pages',{}).get('pages',())
             is_root = True
+        if pages is None:
+            raise ValueError("Не удалось получить страницы")
         for page in pages:
             # page может содержать вложенный словарь по ключу 'pages'
             # в таком случае просто переходим на уровень вглубь, пока не достигнем дна
