@@ -1,7 +1,11 @@
-from enum import IntEnum
+﻿from enum import IntEnum
 
 
 class ServiceType(IntEnum):
+    """
+    Типы сервисов в клиенте
+    https://hydrusnetwork.github.io/hydrus/developer_api.html#services_object
+    """
     TAG_REPOSITORY = 0
     FILE_REPOSITORY = 1
     LOCAL_FILE_DOMAIN = 2
@@ -23,6 +27,10 @@ class ServiceType(IntEnum):
     SERVER_ADMINISTRATION = 99
 
 class HydrusPermission(IntEnum):
+    """
+    Разрешения
+    https://hydrusnetwork.github.io/hydrus/developer_api.html#request_new_permissions
+    """
     URL_IMPORT_EDIT = 0
     FILES_IMPORT_DELETE = 1
     TAGS_EDIT = 2
@@ -37,6 +45,10 @@ class HydrusPermission(IntEnum):
     TIMES = 11
 
 class AddedFileStatus(IntEnum):
+    """
+    Поле status в ответе /add_files/add_file
+    https://hydrusnetwork.github.io/hydrus/developer_api.html#add_files_add_file
+    """
     SUCCESSFULLY_IMPORTED = 1
     ALREADY_IN_DATABASE = 2
     PREVIOUSLY_DELETED = 3
@@ -44,6 +56,10 @@ class AddedFileStatus(IntEnum):
     VETOED = 7
 
 class PageType(IntEnum):
+    """
+    Типы страниц
+    https://hydrusnetwork.github.io/hydrus/developer_api.html#manage_pages_get_pages
+    """
     GALLERY_DOWNLOADER = 1
     SIMPLE_DOWNLOADER = 2
     HARD_DRIVE_IMPORT = 3
@@ -55,6 +71,10 @@ class PageType(IntEnum):
     PAGE_OF_PAGES = 10
 
 class PageState(IntEnum):
+    """
+    Состояния страниц
+    https://hydrusnetwork.github.io/hydrus/developer_api.html#manage_pages_get_pages
+    """
     READY = 0
     INITIALISING = 1
     LOADING = 2

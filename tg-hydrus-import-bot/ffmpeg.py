@@ -1,4 +1,4 @@
-import subprocess
+﻿import subprocess
 from typing import Literal, cast
 import ffmpy
 
@@ -9,6 +9,25 @@ def get_io_mp4(
     input_format: str = "rawvideo",
     output_codec: OutPresetName = "x264"
 ) -> bytes:
+    """
+    Конвертация байтового видеоконтента в формат mp4
+
+    Parameters
+    ----------
+    raw : bytes
+        Видео в байтовом представлении
+        
+    input_format: str
+        Формат из которого производится конвертация
+        
+    output_codec: "x264", "x265", "x265-gpu"
+        Кодек, используемый для конвертации
+
+    Returns
+    -------
+    bytes
+        Возвращается видео, перекодированное в формат mp4, в байтовом представлении
+    """
     out_codecs = {
         "x264": "h264",
         "x265": "libx265 -preset medium -x265-params crf=25",
