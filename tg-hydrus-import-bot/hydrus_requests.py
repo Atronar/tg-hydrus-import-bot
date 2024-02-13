@@ -230,7 +230,10 @@ class HydrusRequests:
         # Берём ключ страницы по имени
         if page_name is None:
             page_name = self.destination_page_name
-        page_key = self.get_page_hash_by_name(page_name)
+        if page_name is None:
+            page_key = None
+        else:
+            page_key = self.get_page_hash_by_name(page_name)
         # page_key не возвращается, если страницы нет — например конфиг пустой.
         if not page_key:
             return hydrus_added_file
