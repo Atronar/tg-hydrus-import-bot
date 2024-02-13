@@ -9,6 +9,7 @@ from aiogram.types import BufferedInputFile, Message, MessageEntity
 from loguru import logger
 
 from tools import camelCase_to_snake_case, bytes_strformat, url_with_schema
+from ffmpeg import get_io_mp4
 
 MAX_FILE_SIZE = 50000000 # 50 Mb
 MAX_PHOTO_SIZE = 10000000 # 10 Mb
@@ -81,10 +82,23 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
     logger.debug(f"Content-Length: {content_length}")
     if content_length > MAX_FILE_SIZE:
         return None
+    content = content_file.content
     answer_kwargs = {}
     if content_type in ("video/mp4",):
         answer_function = msg.answer_video
         answer_kwargs["supports_streaming"] = True
+    elif content_type.startswith("video/",):
+        answer_function = msg.answer_video
+        answer_kwargs["supports_streaming"] = True
+        for output_codec in ("x264", "x265-gpu", "x265"):
+            mp4_content = get_io_mp4(
+                content,
+                input_format=content_type.split("/",1)[-1],
+                output_codec=output_codec
+            )
+            if len(mp4_content) <= MAX_FILE_SIZE:
+                content = mp4_content
+                break
     elif content_type in ("image/gif",):
         answer_function = msg.answer_animation
     elif content_type.startswith("image/"):
@@ -95,7 +109,7 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
         answer_function = msg.answer_audio
     else:
         answer_function = msg.answer_document
-    input_file = BufferedInputFile(content_file.content, filename)
+    input_file = BufferedInputFile(content, filename)
     return answer_function(
         input_file,
         reply_to_message_id=msg.message_id,
