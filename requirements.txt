@@ -1,4 +1,5 @@
 aiogram
+ffmpy
 requests
 loguru
 hydrus-api
