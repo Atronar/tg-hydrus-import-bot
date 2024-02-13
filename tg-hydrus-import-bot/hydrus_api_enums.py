@@ -34,6 +34,7 @@ class HydrusPermission(IntEnum):
     RELATIONSHIPS_EDIT = 8
     RATINGS_EDIT = 9
     POPUPS = 10
+    TIMES = 11
 
 class AddedFileStatus(IntEnum):
     SUCCESSFULLY_IMPORTED = 1
