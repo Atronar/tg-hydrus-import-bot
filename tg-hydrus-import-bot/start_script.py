@@ -104,10 +104,13 @@ async def start_script():
                 await answer_disabled_content(msg, type(msg_content).__name__)
                 return
 
-            file_format = "mp3" if msg_content.mime_type=="audio/mpeg" else msg_content.mime_type.split('/')[-1]
+            if mime_type := msg_content.mime_type:
+                file_format = "mp3" if mime_type=="audio/mpeg" else mime_type.split('/')[-1]
+            else:
+                file_format = "mp3"
             content_file = os.path.join(
                 get_temp_folder(),
-                f"{msg_content.file_unique_id}.{file_format}"
+                os.path.extsep.join([msg_content.file_unique_id, file_format])
             )
 
             # Из текста достаём теги и ссылки
@@ -142,9 +145,13 @@ async def start_script():
                 await answer_disabled_content(msg, type(msg_content).__name__)
                 return
 
+            if mime_type := msg_content.mime_type:
+                file_format = mime_type.split('/')[-1]
+            else:
+                file_format = ""
             content_file = os.path.join(
                 get_temp_folder(),
-                f"{msg_content.file_unique_id}.{msg_content.mime_type.split('/')[-1]}"
+                os.path.extsep.join([msg_content.file_unique_id, file_format])
             )
 
             # Из текста достаём теги и ссылки
