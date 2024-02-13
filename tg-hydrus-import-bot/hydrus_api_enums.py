@@ -1,6 +1,27 @@
 from enum import IntEnum
 
 
+class ServiceType(IntEnum):
+    TAG_REPOSITORY = 0
+    FILE_REPOSITORY = 1
+    LOCAL_FILE_DOMAIN = 2
+    LOCAL_TAG_DOMAIN = 5
+    NUMERICAL_RATING = 6
+    BOOL_RATING = 7
+    ALL_KNOWN_TAGS = 10
+    ALL_KNOWN_FILES = 11
+    LOCAL_BOORU = 12
+    IPFS = 13
+    TRASH = 14
+    ALL_LOCAL_FILES = 15
+    FILE_NOTES = 17
+    CLIENT_API = 18
+    ALL_DELETED_FILES = 19
+    LOCAL_UPDATES = 20
+    ALL_LOCAL_FILE_DOMAINS = 21
+    POSITIVE_INTEGER_RATING = 22
+    SERVER_ADMINISTRATION = 99
+
 class HydrusPermission(IntEnum):
     URL_IMPORT_EDIT = 0
     FILES_IMPORT_DELETE = 1
@@ -13,3 +34,27 @@ class HydrusPermission(IntEnum):
     RELATIONSHIPS_EDIT = 8
     RATINGS_EDIT = 9
     POPUPS = 10
+
+class AddedFileStatus(IntEnum):
+    SUCCESSFULLY_IMPORTED = 1
+    ALREADY_IN_DATABASE = 2
+    PREVIOUSLY_DELETED = 3
+    FAILED_TO_IMPORT = 4
+    VETOED = 7
+
+class PageType(IntEnum):
+    GALLERY_DOWNLOADER = 1
+    SIMPLE_DOWNLOADER = 2
+    HARD_DRIVE_IMPORT = 3
+    PETITIONS = 5
+    FILE_SEARCH = 6
+    URL_DOWNLOADER = 7
+    DUPLICATES = 8
+    THREAD_WATCHER = 9
+    PAGE_OF_PAGES = 10
+
+class PageState(IntEnum):
+    READY = 0
+    INITIALISING = 1
+    LOADING = 2
+    SEARCH_CANCELLED = 3
