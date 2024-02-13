@@ -61,14 +61,13 @@ def url_with_schema(url: str) -> str:
     if url.startswith("https://") or url.startswith("http://"):
         return url
     # //url.example -> https://url.example
-    elif url.startswith("//"):
+    if url.startswith("//"):
         return f"https:{url}"
     # ftp://url.example -> ftp://url.example
-    elif re.match(r"\w+://", url):
+    if re.match(r"\w+://", url):
         return url
     # url.example -> https://url.example
-    else:
-        return f"https://{url}"
+    return f"https://{url}"
 
 
 def make_safe_filename(filename: str) -> str:

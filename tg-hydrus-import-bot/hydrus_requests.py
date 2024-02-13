@@ -273,7 +273,8 @@ class HydrusRequests:
         -------
         dict[str, str | int]
             Возвращается ответ добавления файла, содержащий число status и строки hash и note
-            Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_get_url_files
+            Подробнее:
+            https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_get_url_files
             (первый элемент "url_file_statuses")
         """
         # Без прав на работу со ссылками не имеет смысла
@@ -444,8 +445,10 @@ class HydrusRequests:
         Returns
         -------
         list[dict[str, str | int]]
-            Возвращается список ответов добавления файла, содержащие число status и строки hash и note
-            Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_get_url_files
+            Возвращается список ответов добавления файла,
+            содержащие число status и строки hash и note
+            Подробнее:
+            https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_get_url_files
             (первый элемент "url_file_statuses")
             Каждый элемент списка - ответ добавления content_file и каждого элемента urls
         """
@@ -478,7 +481,8 @@ class HydrusRequests:
         ----------
         list[dict[str, str | int]]
             Список ответов добавления файла
-            Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_get_url_files
+            Подробнее:
+            https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_get_url_files
             (первый элемент "url_file_statuses")
 
         Returns

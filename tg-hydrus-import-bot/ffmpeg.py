@@ -15,9 +15,13 @@ def get_io_mp4(
         "x265-gpu": "hevc_nvenc -preset p7 -tune hq -cq:v 25",
     }
     ff = ffmpy.FFmpeg(
-        global_options='-hide_banner -loglevel quiet -nostats',
-        inputs={'pipe:0': f'-f {input_format}'},
-        outputs={'pipe:1': f'-c:v {out_codecs[output_codec]} -f mp4 -movflags frag_keyframe+empty_moov'}
+        global_options = '-hide_banner -loglevel quiet -nostats',
+        inputs = {
+            'pipe:0': f'-f {input_format}'
+        },
+        outputs = {
+            'pipe:1': f'-c:v {out_codecs[output_codec]} -f mp4 -movflags frag_keyframe+empty_moov'
+        }
     )
-    stdout, stderr = cast(tuple[bytes, bytes], ff.run(input_data=raw, stdout=subprocess.PIPE))
+    stdout, _ = cast(tuple[bytes, bytes], ff.run(input_data=raw, stdout=subprocess.PIPE))
     return stdout
