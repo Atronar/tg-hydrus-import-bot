@@ -81,7 +81,6 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
     logger.debug(f"Content-Length: {content_length}")
     if content_length > MAX_FILE_SIZE:
         return None
-    input_file = BufferedInputFile(content_file.content, filename)
     answer_kwargs = {}
     if content_type in ("video/mp4",):
         answer_function = msg.answer_video
@@ -96,6 +95,7 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
         answer_function = msg.answer_audio
     else:
         answer_function = msg.answer_document
+    input_file = BufferedInputFile(content_file.content, filename)
     return answer_function(
         input_file,
         reply_to_message_id=msg.message_id,
