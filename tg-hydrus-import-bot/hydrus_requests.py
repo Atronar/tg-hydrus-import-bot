@@ -2,6 +2,7 @@
 Модуль связанный с запросами к Гидрусу
 """
 import os
+import time
 from typing import Any, Iterable, Literal
 import hydrus_api
 from loguru import logger
@@ -297,9 +298,17 @@ class HydrusRequests:
             service_keys_to_additional_tags=additional_tags
         )
         # Получаем и возвращаем статус добавления
-        url_file_statuses = self.client.get_url_files(url).get("url_file_statuses", [])
-        if url_file_statuses:
-            return url_file_statuses[0]
+        timeout_lenght = 60
+        timeout_sleep = 2
+        if 'video' in url:
+            timeout_lenght *= 10
+            timeout_sleep = 30
+        timeout_end = time.time() + timeout_lenght
+        while time.time() < timeout_end:
+            url_file_statuses = self.client.get_url_files(url).get("url_file_statuses", [])
+            if url_file_statuses:
+                return url_file_statuses[0]
+            time.sleep(timeout_sleep)
         return {}
 
     def add_tags(
