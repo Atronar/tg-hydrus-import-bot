@@ -3,10 +3,11 @@
 """
 import os
 import time
-from typing import Any, Iterable, Literal
+from typing import Iterable, cast
 import hydrus_api
 from loguru import logger
-from hydrus_api_enums import HydrusPermission
+from hydrus_api_enums import HydrusPermission, AddedFileStatus
+import hydrus_api_typing
 
 
 class HydrusRequests:
@@ -72,7 +73,10 @@ class HydrusRequests:
 
     def get_permission_info(self) -> set[HydrusPermission]:
         """Получение списка разрешений"""
-        self.permission_info = self.client.verify_access_key()
+        self.permission_info = cast(
+            hydrus_api_typing.PermissionInfo,
+            self.client.verify_access_key()
+        )
         self.permissions = {
             HydrusPermission(permission)
             for permission in self.permission_info.get('basic_permissions')
@@ -88,7 +92,7 @@ class HydrusRequests:
             self,
             page_name: str,
             *,
-            pages: Iterable[dict[str, Any]]|None = None
+            pages: Iterable[hydrus_api_typing.Page]|None = None
         ) -> str|None:
         """Рекуррентно достаёт из списка pages первую вкладку с нужным именем,
         заходя сначала вглубь, а потом сравнивая имена
@@ -117,7 +121,10 @@ class HydrusRequests:
         is_root = False
         if pages is None:
             # get_pages() возвращает словарь вида {'pages':{'pages': [список страниц в корне]}}
-            pages = self.client.get_pages().get('pages',{}).get('pages',())
+            pages = cast(
+                hydrus_api_typing.TopPages,
+                self.client.get_pages()
+            ).get('pages',{}).get('pages',())
             is_root = True
         for page in pages:
             # page может содержать вложенный словарь по ключу 'pages'
@@ -181,14 +188,17 @@ class HydrusRequests:
             tags_namespace = self.default_tags_namespace
         if not tags_namespace:
             return None
-        return self.client.get_service(service_name=tags_namespace).get('service').get('service_key')
+        return cast(
+                hydrus_api_typing.GetServiceResponse,
+                self.client.get_service(service_name=tags_namespace)
+        ).get('service').get('service_key')
 
     def add_file(
             self,
             file: str|os.PathLike|hydrus_api.BinaryFileLike,
             *,
             page_name: str|None = None
-        ) -> dict[Literal["status", "hash", "note"], str|int]:
+        ) -> hydrus_api_typing.AddedFile|None:
         """Добавление файла в Гидрус
 
         Parameters
@@ -212,9 +222,9 @@ class HydrusRequests:
         # Без наличия права на добавление не имеет смысла
         if not self.check_permission(HydrusPermission.FILES_IMPORT_DELETE):
             logger.warning('Отсутствует доступ "import and delete files"')
-            return {}
+            return None
         # Добавление файла в Гидрус
-        hydrus_added_file = self.client.add_file(file)
+        hydrus_added_file = cast(hydrus_api_typing.AddedFile, self.client.add_file(file))
         # Берём ключ страницы по имени
         if page_name is None:
             page_name = self.destination_page_name
@@ -233,7 +243,7 @@ class HydrusRequests:
             page_name: str|None = None,
             tags: Iterable[str]|None = None,
             tags_namespace: str|None = None
-        ) -> dict[Literal["status", "hash", "note"], int|str]:
+        ) -> hydrus_api_typing.AddedFile|None:
         """Добавление файла в Гидрус по ссылке
         Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_add_url
 
@@ -264,7 +274,7 @@ class HydrusRequests:
         # Без прав на работу со ссылками не имеет смысла
         if not self.check_permission(HydrusPermission.URL_IMPORT_EDIT):
             logger.warning('Отсутствует доступ "import and edit urls"')
-            return {}
+            return None
         # Страница в клиенте, на которую добавится импорт
         if page_name is None:
             page_name = self.destination_page_name
@@ -276,15 +286,26 @@ class HydrusRequests:
             if self.check_permission(HydrusPermission.TAGS_EDIT):
                 if tags_namespace_hash := self.get_tags_namespace_hash(tags_namespace):
                     # note: clean_tags возвращает не list[str], а {'tags': list[str], ...}
-                    additional_tags = {tags_namespace_hash: self.client.clean_tags(tags).get('tags', [])}
+                    additional_tags = {
+                        tags_namespace_hash: cast(
+                            hydrus_api_typing.CleanedTags,
+                            self.client.clean_tags(tags)
+                        ).get('tags', [])
+                    }
             else:
                 logger.warning('Отсутствует доступ "edit file tags"')
         # Проверяем существование контента — к ранее добавленным файлам дополнительно указанные
         # в service_keys_to_additional_tags теги не добавятся, только вытащенные
         # из импорта по ссылке поэтому добавляем их вручную
-        url_file_statuses: list[dict[Literal["status", "hash", "note"], int|str]] = \
-            self.client.get_url_files(url).get("url_file_statuses", [])
-        if url_file_statuses and url_file_statuses[0].get("status", None) == 2:
+        url_file_statuses = cast(
+            hydrus_api_typing.URLFiles,
+            self.client.get_url_files(url)
+        ).get("url_file_statuses", [])
+        if (
+            tags
+            and url_file_statuses
+            and url_file_statuses[0].get("status", None) == AddedFileStatus.ALREADY_IN_DATABASE
+        ):
             # Файл уже есть - вручную проставленные теги сами не доимпортируются, к сожалению
             self.add_tags(
                 url_file_statuses[0].get("hash", None),
@@ -305,11 +326,14 @@ class HydrusRequests:
             timeout_sleep = 30
         timeout_end = time.time() + timeout_lenght
         while time.time() < timeout_end:
-            url_file_statuses = self.client.get_url_files(url).get("url_file_statuses", [])
+            url_file_statuses = cast(
+                hydrus_api_typing.URLFiles,
+                self.client.get_url_files(url)
+            ).get("url_file_statuses", [])
             if url_file_statuses:
                 return url_file_statuses[0]
             time.sleep(timeout_sleep)
-        return {}
+        return None
 
     def add_tags(
             self,
@@ -344,7 +368,12 @@ class HydrusRequests:
         additional_tags = None
         # Получаем пространство тегов
         if tags_namespace_hash := self.get_tags_namespace_hash(tags_namespace):
-            additional_tags = {tags_namespace_hash: self.client.clean_tags(tags).get('tags', [])}
+            additional_tags = {
+                tags_namespace_hash: cast(
+                    hydrus_api_typing.CleanedTags,
+                    self.client.clean_tags(tags)
+                ).get('tags', [])
+            }
         # И добавляем теги
         # note: clean_tags возвращает не list[str], а {'tags': list[str], ...}
         self.client.add_tags(
@@ -378,10 +407,10 @@ class HydrusRequests:
             content_file: str|os.PathLike|hydrus_api.BinaryFileLike|None = None,
             *,
             page_name: str|None = None,
-            urls: Iterable[str] = None,
-            tags: Iterable[str] = None,
+            urls: Iterable[str]|None = None,
+            tags: Iterable[str]|None = None,
             tags_namespace: str|None = None
-        ) -> list[dict[Literal["status", "hash", "note"], str|int]]:
+        ) -> list[hydrus_api_typing.AddedFile]:
         """Добавление файла в Гидрус
 
         Parameters
@@ -415,7 +444,7 @@ class HydrusRequests:
             (первый элемент "url_file_statuses")
             Каждый элемент списка - ответ добавления content_file и каждого элемента urls
         """
-        added_file: list[dict[Literal["status", "hash", "note"], str|int]] = []
+        added_file: list[hydrus_api_typing.AddedFile] = []
         # Добавление собственно файла в Гидрус
         if content_file and (added_content := self.add_file(content_file, page_name=page_name)):
             added_file.append(added_content)
@@ -436,7 +465,7 @@ class HydrusRequests:
         return added_file
 
     @staticmethod
-    def convert_import_resp_to_str(resp: list[dict[str, str|int]]) -> str:
+    def convert_import_resp_to_str(resp: list[hydrus_api_typing.AddedFile]) -> str:
         """Всего лишь метод, преобразовывающий ответ hydrus_import (в виде списка словарей),
         в человекочитаемом формате сообщения
 
