@@ -3,26 +3,25 @@
 """
 
 import json
-from typing import Any, Literal
+from typing import TypedDict
 
-CONF: dict[Literal[
-    "LOG_LEVEL",
-    "LOG_PATH",
-    "TG_ADMIN_ID",
-    "TG_BOT_TOKEN",
-    "HYDRUS_TOKEN",
-    "HYDRUS_API_URL",
-    "TIME_TO_SLEEP",
-    "TAGS_NAMESPACE",
-    "DESTINATION_PAGE_NAME",
-    "TEMP_PATH",
-    "CONTENT_TYPES",
-], Any] = {}
-""" Global configuration variable """
+class ConfigDict(TypedDict):
+    LOG_LEVEL: str|int
+    LOG_PATH: str
+    TG_ADMIN_ID: list[int]
+    TG_BOT_TOKEN: str
+    HYDRUS_TOKEN: str
+    HYDRUS_API_URL: str
+    TIME_TO_SLEEP: float
+    TAGS_NAMESPACE: str
+    DESTINATION_PAGE_NAME: str
+    TEMP_PATH: str
+    CONTENT_TYPES: list[str]
 
 __CONFPATH = ".conf.json"
 """Local path to json config"""
 
 # Load configuration at runtime
 with open(__CONFPATH, "r", encoding="utf-8") as f:
-    CONF = json.loads(f.read())
+    CONF: ConfigDict = json.loads(f.read())
+    """ Global configuration variable """
