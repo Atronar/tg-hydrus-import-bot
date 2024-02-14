@@ -453,12 +453,6 @@ class HydrusRequests:
             Каждый элемент списка - ответ добавления content_file и каждого элемента urls
         """
         added_file: list[hydrus_api_typing.AddedFile] = []
-        # Добавление собственно файла в Гидрус
-        if content_file and (added_content := self.add_file(content_file, page_name=page_name)):
-            added_file.append(added_content)
-            # Дописывание тегов и ссылок к файлу
-            if tags: self.add_tags(added_content.get("hash"), tags, tags_namespace=tags_namespace)
-            if urls: self.add_urls(added_content.get("hash"), urls)
         # Импорт файлов в Гидрус по ссылкам
         if urls:
             for url in urls:
@@ -469,6 +463,12 @@ class HydrusRequests:
                     tags_namespace=tags_namespace
                 ):
                     added_file.append(h_added_file)
+        # Добавление собственно файла в Гидрус
+        if content_file and (added_content := self.add_file(content_file, page_name=page_name)):
+            added_file.insert(0, added_content)
+            # Дописывание тегов и ссылок к файлу
+            if tags: self.add_tags(added_content.get("hash"), tags, tags_namespace=tags_namespace)
+            if urls: self.add_urls(added_content.get("hash"), urls)
         # Возврат итогового результата
         return added_file
 
