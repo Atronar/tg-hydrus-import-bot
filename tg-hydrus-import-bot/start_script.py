@@ -14,6 +14,7 @@ from loguru import logger
 from config import CONF
 from tools import get_temp_folder
 from hydrus_requests import HydrusRequests
+from saucenao_api import SauceNAO
 from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
     answer_disabled_content, send_content_from_response, get_success_reply_str
 
@@ -26,6 +27,11 @@ async def start_script():
         default_tags_namespace=CONF["TAGS_NAMESPACE"],
         default_destination_page_name=CONF["DESTINATION_PAGE_NAME"]
     )
+    if CONF['SAUCENAO_TOKEN']:
+        sauce_nao = SauceNAO(CONF['SAUCENAO_TOKEN'])
+        sauce_nao.set_similarity(80)
+    else:
+        sauce_nao = None
 
     @dp.message(F.from_user.id.in_(CONF['TG_ADMIN_ID']))
     async def message_handler(msg: Message):
@@ -45,6 +51,9 @@ async def start_script():
                 msg_content.file_id,
                 content_file
             )
+
+            if not (tags or urls) and sauce_nao:
+                urls = sauce_nao.get_sources(content_file)
 
             resp = hydrus.import_content(content_file, tags=tags, urls=urls)
             logger.debug(f"{resp}")

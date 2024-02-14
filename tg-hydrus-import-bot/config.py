@@ -17,6 +17,7 @@ class ConfigDict(TypedDict):
     DESTINATION_PAGE_NAME: str
     TEMP_PATH: str
     CONTENT_TYPES: list[str]
+    SAUCENAO_TOKEN: str
 
 __CONFPATH = ".conf.json"
 """Local path to json config"""

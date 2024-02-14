@@ -9,5 +9,6 @@
   "TAGS_NAMESPACE": "my tags",
   "DESTINATION_PAGE_NAME": "HC",
   "TEMP_PATH": "temp",
-  "CONTENT_TYPES": [ "photo", "video", "animation", "video_note", "audio", "voice", "document", "text" ]
+  "CONTENT_TYPES": [ "photo", "video", "animation", "video_note", "audio", "voice", "document", "text" ],
+  "SAUCENAO_TOKEN": ""
 }
