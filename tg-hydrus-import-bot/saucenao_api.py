@@ -1,5 +1,7 @@
 ﻿from io import IOBase
-from typing import Iterable, TypedDict
+import time
+from typing import Iterable, NotRequired, TypedDict
+from loguru import logger
 import requests
 
 
@@ -10,20 +12,23 @@ class HeaderIndex(TypedDict):
     results: int
 
 class ResponseJSONHeader(TypedDict):
-    user_id: str
-    account_type: str
-    short_limit: str
-    long_limit: str
-    long_remaining: int
-    short_remaining: int
     status: int
-    results_requested: int
-    index: dict[str, HeaderIndex]
-    search_depth: str
-    minimum_similarity: float
-    query_image_display: str
-    query_image: str
-    results_returned: int
+    # successed
+    user_id: NotRequired[str]
+    account_type: NotRequired[str]
+    short_limit: NotRequired[str]
+    long_limit: NotRequired[str]
+    long_remaining: NotRequired[int]
+    short_remaining: NotRequired[int]
+    results_requested: NotRequired[int]
+    index: NotRequired[dict[str, HeaderIndex]]
+    search_depth: NotRequired[str]
+    minimum_similarity: NotRequired[float]
+    query_image_display: NotRequired[str]
+    query_image: NotRequired[str]
+    results_returned: NotRequired[int]
+    # failed
+    message: NotRequired[str]
 
 class ResultHeader(TypedDict):
     similarity: str
@@ -54,10 +59,12 @@ class SauceNAO:
     API_URL = "https://saucenao.com/search.php"
     OUTPUT_TYPE = 2
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, wait_daily_limit=False):
         self.api_key = api_key
         self.db = 999
         self.minsim = 80
+        self.daily_limit_time = 0
+        self.wait_daily_limit = wait_daily_limit
 
     def set_similarity(self, value: float):
         """Установка уровня минимального сходства
@@ -89,14 +96,39 @@ class SauceNAO:
 
         Возвращается список словарей-результатов поиска
         """
+        if (time_end_limit := self.daily_limit_time + 24*3600) > (now := time.time()):
+            # Мы не можем проводить поиск, если достигнут лимит
+            if self.wait_daily_limit:
+                time.sleep(time_end_limit - now)
+            else:
+                return []
+
         params = {
             'output_type': self.OUTPUT_TYPE,
             'api_key': self.api_key,
             'db': self.db,
             'url': url
         }
-        resp = requests.get(self.API_URL, params=params, timeout=60)
-        return self.resp_handle(resp.json())
+        retry = True
+        while retry:
+            try:
+                retry = False
+                resp = requests.get(self.API_URL, params=params, timeout=60)
+                return self.resp_handle(resp.json())
+            except SauceNaoTooManyRequests as exc:
+                logger.info(exc.message)
+                if not exc.daily_limit:
+                    # Упёрлись в 30-секундный лимит, ждём
+                    retry = True
+                    time.sleep(30)
+                else:
+                    # Упёрлись в суточный лимит, записываем время
+                    self.daily_limit_time = time.time()
+                if self.wait_daily_limit:
+                    # Ждём окончания суточного лимита, если хотим ждать
+                    retry = True
+                    time.sleep(24*3600)
+        return []
 
     def search_file(self, file: IOBase|bytes) -> list[Result]:
         """Поиск изображения с помощью сервиса
@@ -105,6 +137,13 @@ class SauceNAO:
 
         Возвращается список словарей-результатов поиска
         """
+        if (time_end_limit := self.daily_limit_time + 24*3600) > (now := time.time()):
+            # Мы не можем проводить поиск, если достигнут лимит
+            if self.wait_daily_limit:
+                time.sleep(time_end_limit - now)
+            else:
+                return []
+
         params = {
             'output_type': self.OUTPUT_TYPE,
             'api_key': self.api_key,
@@ -117,12 +156,36 @@ class SauceNAO:
         else:
             raw_file = file
         files = {'file': ("image.png", raw_file)}
-        resp = requests.post(self.API_URL, params=params, files=files, timeout=60)
-        return self.resp_handle(resp.json())
+        retry = True
+        while retry:
+            try:
+                retry = False
+                resp = requests.post(self.API_URL, params=params, files=files, timeout=60)
+                return self.resp_handle(resp.json())
+            except SauceNaoTooManyRequests as exc:
+                logger.info(exc.message)
+                if not exc.daily_limit:
+                    # Упёрлись в 30-секундный лимит, ждём
+                    retry = True
+                    time.sleep(30)
+                else:
+                    # Упёрлись в суточный лимит, записываем время
+                    self.daily_limit_time = time.time()
+                if self.wait_daily_limit:
+                    # Ждём окончания суточного лимита, если хотим ждать
+                    retry = True
+                    time.sleep(24*3600)
+        return []
 
     def resp_handle(self, json_resp: ResponseJSON) -> list[Result]:
         """Обработка результатов запроса к сервису и возврат только списка результатов
         """
+        status = json_resp.get("header").get("status")
+        if status == -2:
+            raise SauceNaoTooManyRequests(json_resp.get("header").get("message", ""))
+        elif status:
+            header = json_resp.get("header")
+            raise SauseNAOException(header.get("status"), header.get("message", ""))
         results = json_resp.get("results")
         results = [
             result
@@ -146,3 +209,16 @@ class SauceNAO:
             if isinstance(ext_urls, Iterable):
                 sources.extend(ext_urls)
         return sources
+
+class SauseNAOException(Exception):
+    def __init__(self, status: int, message: str, *args: object):
+        self.status = status
+        self.message = message
+        super().__init__(*args)
+        
+class SauceNaoTooManyRequests(SauseNAOException):
+    def __init__(self, message: str, *args: object):
+        self.daily_limit = False
+        if "Daily Search Limit Exceeded" in message:
+            self.daily_limit = True
+        super().__init__(-2, message, *args)
