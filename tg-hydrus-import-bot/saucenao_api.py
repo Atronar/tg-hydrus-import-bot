@@ -216,6 +216,9 @@ class SauseNAOException(Exception):
         self.message = message
         super().__init__(*args)
         
+    def __str__(self) -> str:
+        return f"{self.status}: {self.message}"
+        
 class SauceNaoTooManyRequests(SauseNAOException):
     def __init__(self, message: str, *args: object):
         self.daily_limit = False
