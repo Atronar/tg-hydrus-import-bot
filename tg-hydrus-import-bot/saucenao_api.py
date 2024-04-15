@@ -161,6 +161,9 @@ class SauceNAO:
             try:
                 retry = False
                 resp = requests.post(self.API_URL, params=params, files=files, timeout=60)
+                if resp.status_code == 413:
+                    # Request Entity Too Large, слишеом большой файл
+                    return []
                 return self.resp_handle(resp.json())
             except SauceNaoTooManyRequests as exc:
                 logger.info(exc.message)
