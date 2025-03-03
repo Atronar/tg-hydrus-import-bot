@@ -17,12 +17,12 @@ from config import CONF
 logger.remove()
 logger.add(
     sys.stderr,
-    level=CONF["LOG_LEVEL"]
+    level=CONF.LOG_LEVEL
 )
 logger.add(
-    CONF["LOG_PATH"],
+    CONF.LOG_PATH,
     format="{time} {level} {message}",
-    level=CONF["LOG_LEVEL"],
+    level=CONF.LOG_LEVEL,
     rotation="1 week",
     compression="zip",
 )
@@ -41,8 +41,8 @@ def main():
             logger.info("Не удалось подключиться к Hydrus. "
                         f"Адрес подключения {parsed_url.scheme}://{parsed_url.netloc}")
             logger.debug(f"{ex.response.reason}: {ex.response.url}")
-            logger.info(f"Программа приостановлена на {CONF['TIME_TO_SLEEP']} сек.")
-            time.sleep(CONF['TIME_TO_SLEEP'])
+            logger.info(f"Программа приостановлена на {CONF.TIME_TO_SLEEP} сек.")
+            time.sleep(CONF.TIME_TO_SLEEP)
         else:
             raise ex
 

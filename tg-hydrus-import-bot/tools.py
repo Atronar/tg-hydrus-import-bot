@@ -7,7 +7,7 @@ from config import CONF
 
 
 def prepare_temp_folder():
-    temp_path = CONF["TEMP_PATH"]
+    temp_path = CONF.TEMP_PATH
     if os.path.exists(temp_path):
         for root, _, files in os.walk(temp_path):
             for file in files:
@@ -19,7 +19,7 @@ def prepare_temp_folder():
 
 
 def get_temp_folder() -> str:
-    return os.path.abspath(CONF["TEMP_PATH"])
+    return os.path.abspath(CONF.TEMP_PATH)
 
 
 def prepare_text_for_html(text: str) -> str:

@@ -19,24 +19,24 @@ from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
     answer_disabled_content, send_content_from_response, get_success_reply_str
 
 async def start_script():
-    bot = Bot(token=CONF['TG_BOT_TOKEN'])
+    bot = Bot(token=CONF.TG_BOT_TOKEN)
     dp = Dispatcher()
     hydrus = HydrusRequests(
-        CONF['HYDRUS_TOKEN'],
-        api_url=CONF['HYDRUS_API_URL'],
-        default_tags_namespace=CONF["TAGS_NAMESPACE"],
-        default_destination_page_name=CONF["DESTINATION_PAGE_NAME"]
+        CONF.HYDRUS_TOKEN,
+        api_url=CONF.HYDRUS_API_URL,
+        default_tags_namespace=CONF.TAGS_NAMESPACE,
+        default_destination_page_name=CONF.DESTINATION_PAGE_NAME
     )
-    if CONF['SAUCENAO_TOKEN']:
-        sauce_nao = SauceNAO(CONF['SAUCENAO_TOKEN'])
+    if CONF.SAUCENAO_TOKEN:
+        sauce_nao = SauceNAO(CONF.SAUCENAO_TOKEN)
         sauce_nao.set_similarity(80)
     else:
         sauce_nao = None
 
-    @dp.message(F.from_user.id.in_(CONF['TG_ADMIN_ID']))
+    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID))
     async def message_handler(msg: Message):
         if msg_content := msg.photo:
-            if not (msg.photo and "photo" in CONF["CONTENT_TYPES"]):
+            if not (msg.photo and "photo" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, "photo")
                 return
 
@@ -67,9 +67,9 @@ async def start_script():
                 content_size=content_file.tell()
             )
         elif msg_content := (msg.video or msg.animation or msg.video_note):
-            if not ((msg.video and "video" in CONF["CONTENT_TYPES"]) \
-                or (msg.animation and "animation" in CONF["CONTENT_TYPES"]) \
-                or (msg.video_note and "video_note" in CONF["CONTENT_TYPES"])):
+            if not ((msg.video and "video" in CONF.CONTENT_TYPES) \
+                or (msg.animation and "animation" in CONF.CONTENT_TYPES) \
+                or (msg.video_note and "video_note" in CONF.CONTENT_TYPES)):
                 await answer_disabled_content(msg, type(msg_content).__name__)
                 return
 
@@ -98,18 +98,18 @@ async def start_script():
                 content_size=os.path.getsize(content_file)
             )
         # elif msg_content := msg.animation:
-        #    if not (msg.animation and "animation" in CONF["CONTENT_TYPES"]):
+        #    if not (msg.animation and "animation" in CONF.CONTENT_TYPES):
         #        await answer_disabled_content(msg, type(msg_content).__name__)
         #        return
         #     ...
         # elif msg_content := msg.video_note:
-        #    if not (msg.video_note and "video_note" in CONF["CONTENT_TYPES"]):
+        #    if not (msg.video_note and "video_note" in CONF.CONTENT_TYPES):
         #        await answer_disabled_content(msg, type(msg_content).__name__)
         #        return
         #     ...
         elif msg_content := (msg.audio or msg.voice):
-            if not ((msg.audio and "audio" in CONF["CONTENT_TYPES"]) \
-                or (msg.voice and "voice" in CONF["CONTENT_TYPES"])):
+            if not ((msg.audio and "audio" in CONF.CONTENT_TYPES) \
+                or (msg.voice and "voice" in CONF.CONTENT_TYPES)):
                 await answer_disabled_content(msg, type(msg_content).__name__)
                 return
 
@@ -145,12 +145,12 @@ async def start_script():
                 content_size=os.path.getsize(content_file)
             )
         # elif msg_content := msg.voice:
-        #    if not (msg.voice and "voice" in CONF["CONTENT_TYPES"]):
+        #    if not (msg.voice and "voice" in CONF.CONTENT_TYPES):
         #        await answer_disabled_content(msg, type(msg_content).__name__)
         #        return
         #     ...
         elif msg_content := msg.document:
-            if not (msg.document and "document" in CONF["CONTENT_TYPES"]):
+            if not (msg.document and "document" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, type(msg_content).__name__)
                 return
 
@@ -182,7 +182,7 @@ async def start_script():
                 content_size=os.path.getsize(content_file)
             )
         elif msg.text:
-            if not (msg.text and "text" in CONF["CONTENT_TYPES"]):
+            if not (msg.text and "text" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, "text")
                 return
 
@@ -226,5 +226,5 @@ async def start_script():
     await dp.start_polling(bot)
 
     await bot.session.close()
-    logger.info(f"Программа приостановлена на {CONF['TIME_TO_SLEEP']} сек.")
-    await asyncio.sleep(CONF['TIME_TO_SLEEP'])
+    logger.info(f"Программа приостановлена на {CONF.TIME_TO_SLEEP} сек.")
+    await asyncio.sleep(CONF.TIME_TO_SLEEP)
