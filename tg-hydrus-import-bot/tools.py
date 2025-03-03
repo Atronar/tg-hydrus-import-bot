@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 
 from loguru import logger
 from human_bytes import HumanBytes
@@ -9,9 +10,8 @@ from config import CONF
 def prepare_temp_folder():
     temp_path = CONF.TEMP_PATH
     if os.path.exists(temp_path):
-        for root, _, files in os.walk(temp_path):
-            for file in files:
-                os.remove(os.path.join(root, file))
+        shutil.rmtree(temp_path)
+        os.makedirs(temp_path, exist_ok=True)
         logger.info("Временные файлы удалены")
     else:
         os.makedirs(temp_path)
