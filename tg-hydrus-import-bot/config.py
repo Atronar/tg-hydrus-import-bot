@@ -5,6 +5,7 @@
 import json
 import os
 from typing import Annotated, Literal
+import shutil
 
 from pydantic import BaseModel, StringConstraints, Field, ValidationError
 
@@ -24,6 +25,12 @@ class ConfigModel(BaseModel):
 
 __CONFPATH = ".conf.json"
 """Local path to json config"""
+
+if not os.path.exists(__CONFPATH):
+    module_path = os.path.dirname(os.path.dirname(__file__))
+    shutil.copyfile(os.path.join(module_path, ".conf.json.example"), __CONFPATH)
+    print("Создан новый конфиг. Заполните его и перезапустите бота!")
+    exit(0)
 
 # Load configuration at runtime
 try:
