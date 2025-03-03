@@ -4,6 +4,7 @@
 
 import json
 import os
+from pathlib import Path
 from typing import Annotated, Literal
 import shutil
 
@@ -49,9 +50,10 @@ class ConfigModel(BaseModel):
 __CONFPATH = ".conf.json"
 """Local path to json config"""
 
-if not os.path.exists(__CONFPATH):
-    module_path = os.path.dirname(os.path.dirname(__file__))
-    shutil.copyfile(os.path.join(module_path, ".conf.json.example"), __CONFPATH)
+if not Path(__CONFPATH).exists():
+    module_path = Path(__file__).absolute().parent.parent
+    example_path = module_path / ".conf.json.example"
+    shutil.copyfile(example_path, __CONFPATH)
     print("Создан новый конфиг. Заполните его и перезапустите бота!")
     exit(0)
 
