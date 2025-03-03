@@ -70,26 +70,28 @@ def url_with_schema(url: str) -> str:
     return f"https://{url}"
 
 
+_ILLEGAL_CHARS = set('/\\?%*:|"<>')
+_ILLEGAL_UNPRINTABLE = {chr(c) for c in [*range(31), 127]}
+_RESERVED_WORDS = {
+    'CON', 'CONIN$', 'CONOUT$', 'PRN', 'AUX', 'CLOCK$', 'NUL',
+    'COM0', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+    'LPT0', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+    'LST', 'KEYBD$', 'SCREEN$', '$IDLE$', 'CONFIG$'
+}
+
 def make_safe_filename(filename: str) -> str:
     """
     # Make title file system safe
 # https://stackoverflow.com/questions/7406102/create-sane-safe-filename-from-any-unsafe-string
     """
-    illegal_chars = "/\\?%*:|\"<>"
-    illegal_unprintable = {chr(c) for c in (*range(31), 127)}
-    reserved_words = {
-        'CON', 'CONIN$', 'CONOUT$', 'PRN', 'AUX', 'CLOCK$', 'NUL',
-        'COM0', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
-        'LPT0', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
-        'LST', 'KEYBD$', 'SCREEN$', '$IDLE$', 'CONFIG$'
-    }
-    if os.path.splitext(filename)[0].upper() in reserved_words: return f"__{filename}"
-    if set(filename)=={'.'}: return filename.replace('.', '\uff0e')
+    if not filename: return "file"
+    if os.path.splitext(filename)[0].upper() in _RESERVED_WORDS: return f"__{filename}"
+    if filename[0]==filename[-1]=='.' and set(filename)=={'.'}: return '\uff0e' * len(filename)
     return "".join(
-        chr(ord(c)+65248) if c in illegal_chars else c
+        chr(ord(c)+65248) if c in _ILLEGAL_CHARS else c
         for c in filename
-        if c not in illegal_unprintable
-    ).rstrip().rstrip('.')
+        if c not in _ILLEGAL_UNPRINTABLE
+    ).rstrip('. ') or "file"
 
 def bytes_strformat(num: int|float) -> str:
     return HumanBytes.fast_format(num)
