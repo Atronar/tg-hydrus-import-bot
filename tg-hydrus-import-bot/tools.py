@@ -92,7 +92,7 @@ def make_safe_filename(filename: str) -> str:
     ).rstrip().rstrip('.')
 
 def bytes_strformat(num: int|float) -> str:
-    return HumanBytes.format(num)
+    return HumanBytes.fast_format(num)
 
 def camelCase_to_snake_case(
         string: str,

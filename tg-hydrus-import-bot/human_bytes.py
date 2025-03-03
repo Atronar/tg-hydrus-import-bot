@@ -34,9 +34,13 @@ class HumanBytes:
         if not isinstance(precision, int) or precision < 0:
             raise ValueError("precision must be a non-negative integer")
 
-        unit_labels = HumanBytes.METRIC_LABELS if metric else HumanBytes.BINARY_LABELS
+        if metric:
+            unit_labels = HumanBytes.METRIC_LABELS
+            unit_step = 1000
+        else:
+            unit_labels = HumanBytes.BINARY_LABELS
+            unit_step = 1024
         max_index = len(unit_labels) - 1
-        unit_step = 1000 if metric else 1024
 
         # VERY IMPORTANT:
         # Only accepts the CURRENT unit if we're BELOW the threshold where
@@ -65,3 +69,46 @@ class HumanBytes:
             unit_index += 1
 
         return precision_format.format(sign, num, unit_labels[unit_index])
+
+    @staticmethod
+    def fast_format(num: int|float, metric: bool=False) -> str:
+        """
+        Like format(), but optimized for only precision=1
+        """
+
+        # assert, ранее бывший здесь, отключается флагом -O в Python, что может привести к ошибкам
+        if not isinstance(num, (int, float)):
+            raise TypeError("num must be an int or float")
+        if not isinstance(metric, bool):
+            raise TypeError("metric must be a bool")
+
+        # VERY IMPORTANT:
+        # Only accepts the CURRENT unit if we're BELOW the threshold where
+        # float rounding behavior would place us into the NEXT unit: F.ex.
+        # when rounding a float to 1 decimal, any number ">= 1023.95" will
+        # be rounded to "1024.0". Obviously we don't want ugly output such
+        # as "1024.0 KiB", since the proper term for that is "1.0 MiB".
+        if metric:
+            unit_step = 1000
+            unit_step_thresh = 999.95
+            unit_labels = HumanBytes.METRIC_LABELS
+        else:
+            unit_step = 1024
+            unit_step_thresh = 1023.95
+            unit_labels = HumanBytes.BINARY_LABELS
+        max_index = len(unit_labels) - 1
+
+        sign = "-" if num < 0 else ""
+        if sign: # Faster than ternary assignment or always running abs().
+            num = -num
+
+        unit_index = 0
+        while unit_index < max_index and num >= unit_step_thresh:
+            # We only shrink the number if we HAVEN'T reached the last unit.
+            # NOTE: These looped divisions accumulate floating point rounding
+            # errors, but each new division pushes the rounding errors further
+            # and further down in the decimals, so it doesn't matter at all.
+            num /= unit_step
+            unit_index += 1
+
+        return f"{sign}{num:.1f} {unit_labels[unit_index]}"
