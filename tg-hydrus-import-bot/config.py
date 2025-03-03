@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Annotated, Literal
 import shutil
+import sys
 
 from pydantic import BaseModel, StringConstraints, Field, ValidationError
 
@@ -55,18 +56,19 @@ if not Path(__CONFPATH).exists():
     example_path = module_path / ".conf.json.example"
     shutil.copyfile(example_path, __CONFPATH)
     print("Создан новый конфиг. Заполните его и перезапустите бота!")
-    exit(0)
+    sys.exit(0)
 
 # Load configuration at runtime
 try:
     with open(__CONFPATH, "r", encoding="utf-8") as f:
         CONF = ConfigModel(**json.load(f))
         """ Global configuration variable """
+        CONF = CONF.model_copy(update={
+            "TG_BOT_TOKEN": os.getenv("TG_BOT_TOKEN", CONF.TG_BOT_TOKEN),
+            "HYDRUS_TOKEN": os.getenv("HYDRUS_TOKEN", CONF.HYDRUS_TOKEN),
+            "SAUCENAO_TOKEN": os.getenv("SAUCENAO_TOKEN", CONF.SAUCENAO_TOKEN)
+        })
 except ValidationError as e:
-    print(f"Ошибка в конфиге: {e}")
-    exit(1)
-
-# Опциональное переопределение секретов через окружение
-CONF.TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", CONF.TG_BOT_TOKEN)
-CONF.HYDRUS_TOKEN = os.getenv("HYDRUS_TOKEN", CONF.HYDRUS_TOKEN)
-CONF.SAUCENAO_TOKEN = os.getenv("SAUCENAO_TOKEN", CONF.SAUCENAO_TOKEN)
+    errors = "\n".join([f"- {err['loc'][0]}: {err['msg']}" for err in e.errors()])
+    print(f"Ошибки в конфиге:\n{errors}")
+    sys.exit(1)
