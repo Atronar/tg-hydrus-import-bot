@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import re
 import shutil
 
@@ -18,8 +19,8 @@ def prepare_temp_folder():
         logger.info(f"Создана папка временных файлов по пути {temp_path}")
 
 
-def get_temp_folder() -> str:
-    return os.path.abspath(CONF.TEMP_PATH)
+def get_temp_folder() -> Path:
+    return Path(CONF.TEMP_PATH).resolve()
 
 
 def prepare_text_for_html(text: str) -> str:
