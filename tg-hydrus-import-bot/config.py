@@ -3,7 +3,9 @@
 """
 
 import json
+import os
 from typing import Annotated, Literal
+
 from pydantic import BaseModel, StringConstraints, Field, ValidationError
 
 class ConfigModel(BaseModel):
@@ -31,3 +33,8 @@ try:
 except ValidationError as e:
     print(f"Ошибка в конфиге: {e}")
     exit(1)
+
+# Опциональное переопределение секретов через окружение
+CONF.TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", CONF.TG_BOT_TOKEN)
+CONF.HYDRUS_TOKEN = os.getenv("HYDRUS_TOKEN", CONF.HYDRUS_TOKEN)
+CONF.SAUCENAO_TOKEN = os.getenv("SAUCENAO_TOKEN", CONF.SAUCENAO_TOKEN)
