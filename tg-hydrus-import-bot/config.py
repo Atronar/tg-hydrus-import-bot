@@ -20,7 +20,7 @@ class ConfigModel(BaseModel):
     TAGS_NAMESPACE: str
     DESTINATION_PAGE_NAME: str
     TEMP_PATH: str
-    CONTENT_TYPES: list[Literal[ "photo", "video", "animation", "video_note", "document", "text" ]]
+    CONTENT_TYPES: list[Literal[ "photo", "video", "animation", "video_note", "audio", "voice", "document", "text" ]]
     SAUCENAO_TOKEN: str
 
 __CONFPATH = ".conf.json"
