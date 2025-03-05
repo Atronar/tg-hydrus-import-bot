@@ -40,20 +40,17 @@ def prepare_text_for_html(text: str) -> str:
     )
 
 
-def add_urls_to_text(text: str, urls: list, videos: list) -> str:
-    first_link = True
-    urls = videos + urls
+def add_urls_to_text(text: str, urls: list[str], videos: list[str]) -> str:
+    all_content = [url for url in (videos + urls) if url not in text]
 
-    if not urls:
+    if not all_content:
         return text
 
-    for url in urls:
-        if url not in text:
-            if first_link:
-                text = f'<a href="{url}"> </a>{text}\n\n{url}' if text else url
-                first_link = False
-            else:
-                text += f"\n{url}"
+    # Первая ссылка вставляется через <a>, остальные в конец
+    first_url = all_content[0]
+    text = f'<a href="{first_url}"> </a>{text}\n\n{first_url}' if text else first_url
+    # Добавление остальных URL
+    text = '\n'.join([text, *(all_content[1:])])
     return text
 
 
