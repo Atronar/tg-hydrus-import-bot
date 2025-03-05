@@ -61,16 +61,19 @@ def split_text(text: str, fragment_size: int) -> list[str]:
         for fragment in range(0, len(text), fragment_size)
     ]
 
+_SCHEME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", re.IGNORECASE)
+
 def url_with_schema(url: str) -> str:
+    """Возвращает переданный url вместе со схемой"""
     # В наиболее частых случаях не нужно напрягать регулярку
     # https://url.example -> https://url.example
-    if url.startswith("https://") or url.startswith("http://"):
+    if url.lower().startswith(("https://", "http://",)):
         return url
     # //url.example -> https://url.example
     if url.startswith("//"):
         return f"https:{url}"
     # ftp://url.example -> ftp://url.example
-    if re.match(r"\w+://", url):
+    if _SCHEME_PATTERN.match(url):
         return url
     # url.example -> https://url.example
     return f"https://{url}"
