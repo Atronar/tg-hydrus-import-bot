@@ -9,14 +9,21 @@ from config import CONF
 
 
 def prepare_temp_folder():
-    temp_path = CONF.TEMP_PATH
-    if os.path.exists(temp_path):
-        shutil.rmtree(temp_path)
-        os.makedirs(temp_path, exist_ok=True)
-        logger.info("Временные файлы удалены")
-    else:
-        os.makedirs(temp_path)
-        logger.info(f"Создана папка временных файлов по пути {temp_path}")
+    try:
+        temp_path = CONF.TEMP_PATH
+        if os.path.exists(temp_path):
+            shutil.rmtree(temp_path)
+            os.makedirs(temp_path, exist_ok=True)
+            logger.info("Временные файлы удалены")
+        else:
+            os.makedirs(temp_path)
+            logger.info(f"Создана папка временных файлов по пути {temp_path}")
+    except PermissionError as e:
+        logger.error(f"Ошибка доступа: {e}")
+        raise
+    except Exception as e:
+        logger.critical(f"Неизвестная ошибка: {e}")
+        raise
 
 
 def get_temp_folder() -> Path:
