@@ -54,11 +54,12 @@ def add_urls_to_text(text: str, urls: list[str], videos: list[str]) -> str:
     return text
 
 
-def split_text(text: str, fragment_size: int) -> list:
-    fragments = []
-    for fragment in range(0, len(text), fragment_size):
-        fragments.append(text[fragment : fragment + fragment_size])
-    return fragments
+def split_text(text: str, fragment_size: int) -> list[str]:
+    """Разбивает большой текст на фрагменты указанного размера."""
+    return [
+        text[fragment : fragment + fragment_size]
+        for fragment in range(0, len(text), fragment_size)
+    ]
 
 def url_with_schema(url: str) -> str:
     # В наиболее частых случаях не нужно напрягать регулярку
