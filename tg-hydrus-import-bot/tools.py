@@ -9,6 +9,7 @@ from config import CONF
 
 
 def prepare_temp_folder():
+    """Создаёт, либо очищает временную папку"""
     try:
         temp_path = CONF.TEMP_PATH
         if os.path.exists(temp_path):
@@ -27,10 +28,12 @@ def prepare_temp_folder():
 
 
 def get_temp_folder() -> Path:
+    """Возвращает путь ко временной папке"""
     return Path(CONF.TEMP_PATH).resolve()
 
 
 def prepare_text_for_html(text: str) -> str:
+    """Экранирование текста для html-разметки в Telegram"""
     return (
         text
         .replace("&", "&amp;")
@@ -103,6 +106,7 @@ def make_safe_filename(filename: str) -> str:
     ).rstrip('. ') or "file"
 
 def bytes_strformat(num: int|float) -> str:
+    """Преобразует число байт в человекопонятный вид"""
     return HumanBytes.fast_format(num)
 
 def camelCase_to_snake_case(
@@ -110,4 +114,5 @@ def camelCase_to_snake_case(
         *,
         __re_pattern = re.compile('((?<=[a-zа-яё0-9])[A-ZА-ЯЁ]|(?!^)(?<!_)[A-ZА-ЯЁ](?=[a-zа-яё]))')
     ) -> str:
+    """Преобразует строку camelCase в snake_case"""
     return __re_pattern.sub(r'_\1', string).lower()
