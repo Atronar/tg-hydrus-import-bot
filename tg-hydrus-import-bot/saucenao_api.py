@@ -232,12 +232,14 @@ class SauceNAO:
     def resp_handle(self, json_resp: ResponseJSON) -> list[Result]:
         """Обработка результатов запроса к сервису и возврат только списка результатов
         """
-        status = json_resp.get("header").get("status")
+        header = json_resp.get("header")
+        status = header.get("status")
+
         if status == -2:
-            raise SauceNaoTooManyRequests(json_resp.get("header").get("message", ""))
+            raise SauceNaoTooManyRequests(header.get("message", ""))
         elif status:
-            header = json_resp.get("header")
-            raise SauseNAOException(header.get("status"), header.get("message", ""))
+            raise SauseNAOException(status, header.get("message", ""))
+
         results = json_resp.get("results")
         results = [
             result
