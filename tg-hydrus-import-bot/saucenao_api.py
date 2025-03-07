@@ -1,8 +1,10 @@
-﻿from io import IOBase
+﻿import hashlib
+from io import IOBase
 import time
-from typing import Any, Iterable, NotRequired, TypedDict
-from loguru import logger
+from typing import Any, NotRequired, TypedDict
 import urllib.parse
+import cachetools
+from loguru import logger
 import requests
 
 
@@ -108,6 +110,7 @@ class SauceNAO:
     MAX_RETRIES = 30
     RETRY_DELAY = 5
     TIMEOUT = 60
+    _cache = cachetools.TTLCache(maxsize=100, ttl=604800)
 
     def __init__(self, api_key: str, wait_daily_limit=False, *, proxies: dict[str, str]|None=None):
         self.api_key = api_key
@@ -116,6 +119,12 @@ class SauceNAO:
         self.daily_limit_time = 0
         self.wait_daily_limit = wait_daily_limit
         self.proxies = proxies
+
+    def _get_cache_key(self, file: str|IOBase|bytes):
+        if isinstance(file, str):
+            return ('url', urllib.parse.quote(file))
+        content = self._read_file_content(file)
+        return ('content', hashlib.md5(content).hexdigest())
 
     def set_similarity(self, value: float):
         """Установка уровня минимального сходства
@@ -132,6 +141,7 @@ class SauceNAO:
         """Установка прокси"""
         self.proxies = proxies
 
+    @cachetools.cached(_cache, key=_get_cache_key)
     def search(self, file: str|IOBase|bytes) -> list[Result]:
         """Поиск изображения с помощью сервиса
 
@@ -232,6 +242,7 @@ class SauceNAO:
         
         return ResponseJSON(**json_data)
 
+    @cachetools.cached(_cache, key=_get_cache_key)
     def search_url(self, url: str) -> list[Result]:
         """Поиск изображения с помощью сервиса
 
@@ -246,6 +257,7 @@ class SauceNAO:
         params = self._build_params(url=url)
         return self._execute_search("GET", params=params)
 
+    @cachetools.cached(_cache, key=_get_cache_key)
     def search_file(self, file: IOBase|bytes) -> list[Result]:
         """Поиск изображения с помощью сервиса
 
