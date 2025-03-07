@@ -2,6 +2,7 @@
 import time
 from typing import Iterable, NotRequired, TypedDict
 from loguru import logger
+import urllib.parse
 import requests
 
 
@@ -38,7 +39,39 @@ class ResultHeader(TypedDict):
     dupes: int
     hidden: int
 
-ResultData = dict[str, list[str]|str|int]
+class ResultData(TypedDict):
+    author_name: NotRequired[str|None]
+    author_url: NotRequired[str]
+    anilist_id: NotRequired[int]
+    as_project: NotRequired[str]
+    company: NotRequired[str]
+    creator: NotRequired[list[str]|str]
+    creator_name: NotRequired[str]
+    da_id: NotRequired[str] # but is int as string
+    eng_name: NotRequired[str]
+    est_time: NotRequired[str] # "00:12:59 / 00:23:20"
+    ext_urls: NotRequired[list[str]]
+    fa_id: NotRequired[int]
+    getchu_id: NotRequired[str] # but is int as string
+    id: NotRequired[str] # but is int as string
+    jp_name: NotRequired[str]
+    mal_id: NotRequired[int]
+    member_id: NotRequired[int]
+    member_name: NotRequired[str]
+    mu_id: NotRequired[int]
+    nijie_id: NotRequired[int]
+    part: NotRequired[str] # but is int as string
+    path: NotRequired[str]
+    pixiv_id: NotRequired[int]
+    published: NotRequired[str] # "2021-03-04T10:21:51.000Z"
+    source: NotRequired[str]
+    service: NotRequired[str]
+    service_name: NotRequired[str]
+    title: NotRequired[str]
+    type: NotRequired[str]
+    user_id: NotRequired[str] # but is int as string
+    user_name: NotRequired[str]
+    year: NotRequired[str] # but is int as string
 
 class Result(TypedDict):
     """Один из результатов поиска изображения
@@ -208,9 +241,22 @@ class SauceNAO:
         results = self.search(file)
         sources: list[str] = []
         for result in results:
-            ext_urls = result.get("data").get("ext_urls", [])
-            if isinstance(ext_urls, Iterable):
+            if (ext_urls := result.get("data").get("ext_urls")):
                 sources.extend(ext_urls)
+            if (getchu_id := result.get("data").get("getchu_id")):
+                sources.append(f'http://www.getchu.com/soft.phtml?id={getchu_id}')
+            if (
+                result.get("header").get("index_id") == 18
+                and (name := result.get("data").get("eng_name"))
+            ): # nhentai
+                sources.append(f'https://nhentai.net/search/?q={urllib.parse.quote(name)}')
+            if (
+                result.get("header").get("index_id") == 43
+                and (service_id := result.get("data").get("service"))
+                and (user_id := result.get("data").get("user_id"))
+                and (post_id := result.get("data").get("id"))
+            ): # kemono
+                sources.append(f'https://kemono.su/{service_id}/user/{user_id}/post/{post_id}')
         return sources
 
 class SauseNAOException(Exception):
