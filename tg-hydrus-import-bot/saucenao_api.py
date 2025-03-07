@@ -1,6 +1,6 @@
 ﻿from io import IOBase
 import time
-from typing import Iterable, NotRequired, TypedDict
+from typing import Any, Iterable, NotRequired, TypedDict
 from loguru import logger
 import urllib.parse
 import requests
@@ -107,13 +107,17 @@ class SauceNAO:
     """
     API_URL = "https://saucenao.com/search.php"
     OUTPUT_TYPE = 2
+    MAX_RETRIES = 30
+    RETRY_DELAY = 5
+    TIMEOUT = 60
 
-    def __init__(self, api_key: str, wait_daily_limit=False):
+    def __init__(self, api_key: str, wait_daily_limit=False, *, proxies: dict[str, str]|None=None):
         self.api_key = api_key
         self.db = 999
         self.minsim = 80
         self.daily_limit_time = 0
         self.wait_daily_limit = wait_daily_limit
+        self.proxies = proxies
 
     def set_similarity(self, value: float):
         """Установка уровня минимального сходства
@@ -125,6 +129,10 @@ class SauceNAO:
             self.minsim = 100
         else:
             self.minsim = value
+
+    def set_proxies(self, proxies: dict[str, str]|None):
+        """Установка прокси"""
+        self.proxies = proxies
 
     def search(self, file: str|IOBase|bytes) -> list[Result]:
         """Поиск изображения с помощью сервиса
@@ -138,6 +146,94 @@ class SauceNAO:
             return self.search_file(file)
         return self.search_url(file)
 
+    def _handle_rate_limit(self) -> float | None:
+        """Проверка и обработка суточного лимита"""
+        if (remaining_time := self.daily_limit_time + 24*3600 - time.time()) > 0:
+            logger.warning(f"Достигнут дневной лимит запросов к SauceNAO")
+            # Мы не можем проводить поиск, если достигнут лимит
+            if self.wait_daily_limit:
+                logger.info(f"Ожидание {remaining_time:.0f} секунд")
+                time.sleep(remaining_time)
+            else:
+                return remaining_time
+        return None
+
+    def _build_params(self, **kwargs) -> dict[str, Any]:
+        """Построение базовых параметров"""
+        return {
+            'output_type': self.OUTPUT_TYPE,
+            'api_key': self.api_key,
+            'db': self.db,
+            **kwargs
+        }
+
+    def _read_file_content(self, file: IOBase|bytes) -> bytes:
+        """Чтение файла с сохранением позиции"""
+        if isinstance(file, IOBase):
+            pos = file.tell()
+            content = file.read()
+            file.seek(pos)
+            return content
+        return file
+
+    def _make_request(self, method: str, **request_kwargs) -> ResponseJSON|None:
+        """Общая логика выполнения запроса с обработкой повторов"""
+        for attempt in range(self.MAX_RETRIES):
+            is_slept = False
+            try:
+                resp = requests.request(
+                    method,
+                    self.API_URL,
+                    **request_kwargs,
+                    timeout = self.TIMEOUT,
+                    proxies = self.proxies
+                )
+                resp.raise_for_status()
+                return self._process_response(resp)
+                
+            except SauceNaoTooManyRequests as exc:
+                logger.info(exc.message)
+                if not exc.daily_limit:
+                    # Упёрлись в 30-секундный лимит, ждём
+                    time.sleep(30)
+                    is_slept = True
+                else:
+                    # Упёрлись в суточный лимит, записываем время
+                    self.daily_limit_time = time.time()
+                if self._handle_rate_limit():
+                    return None
+            except requests.HTTPError as exc:
+                logger.error(f"HTTP error {exc.response.status_code}: {exc}")
+                if exc.response.status_code == 413:
+                    return None
+            except requests.RequestException as exc:
+                logger.error(f"Request failed: {exc}")
+            
+            if not is_slept and attempt < self.MAX_RETRIES - 1:
+                sleep_time = self.RETRY_DELAY * (attempt + 1)
+                logger.info(f"Retrying in {sleep_time}s...")
+                time.sleep(sleep_time)
+        
+        return None
+
+    def _execute_search(self, method: str, **request_args) -> list[Result]:
+        """Выполнение поискового запроса"""
+        if resp := self._make_request(method, **request_args):
+            return self.resp_handle(resp)
+        return []
+
+    def _process_response(self, response: requests.Response) -> ResponseJSON:
+        """Обработка и валидация ответа"""
+        try:
+            json_data = response.json()
+        except ValueError:
+            raise ValueError("Invalid JSON response")
+        
+        if not isinstance(json_data, dict):
+            raise TypeError("Unexpected response format")
+        
+        return ResponseJSON(**json_data)
+
     def search_url(self, url: str) -> list[Result]:
         """Поиск изображения с помощью сервиса
 
@@ -145,39 +241,12 @@ class SauceNAO:
 
         Возвращается список словарей-результатов поиска
         """
-        if (time_end_limit := self.daily_limit_time + 24*3600) > (now := time.time()):
-            # Мы не можем проводить поиск, если достигнут лимит
-            if self.wait_daily_limit:
-                time.sleep(time_end_limit - now)
-            else:
-                return []
+        # Проверка на достижение дневного лимита и ожидание/завершение поиска
+        if self._handle_rate_limit():
+            return []
 
-        params = {
-            'output_type': self.OUTPUT_TYPE,
-            'api_key': self.api_key,
-            'db': self.db,
-            'url': url
-        }
-        retry = True
-        while retry:
-            try:
-                retry = False
-                resp = requests.get(self.API_URL, params=params, timeout=60)
-                return self.resp_handle(resp.json())
-            except SauceNaoTooManyRequests as exc:
-                logger.info(exc.message)
-                if not exc.daily_limit:
-                    # Упёрлись в 30-секундный лимит, ждём
-                    retry = True
-                    time.sleep(30)
-                else:
-                    # Упёрлись в суточный лимит, записываем время
-                    self.daily_limit_time = time.time()
-                if self.wait_daily_limit:
-                    # Ждём окончания суточного лимита, если хотим ждать
-                    retry = True
-                    time.sleep(24*3600)
-        return []
+        params = self._build_params(url=url)
+        return self._execute_search("GET", params=params)
 
     def search_file(self, file: IOBase|bytes) -> list[Result]:
         """Поиск изображения с помощью сервиса
@@ -186,48 +255,14 @@ class SauceNAO:
 
         Возвращается список словарей-результатов поиска
         """
-        if (time_end_limit := self.daily_limit_time + 24*3600) > (now := time.time()):
-            # Мы не можем проводить поиск, если достигнут лимит
-            if self.wait_daily_limit:
-                time.sleep(time_end_limit - now)
-            else:
-                return []
+        # Проверка на достижение дневного лимита и ожидание/завершение поиска
+        if self._handle_rate_limit():
+            return []
 
-        params = {
-            'output_type': self.OUTPUT_TYPE,
-            'api_key': self.api_key,
-            'db': self.db
-        }
-        if isinstance(file, IOBase):
-            file_pos = file.tell()
-            raw_file = file.read()
-            file.seek(file_pos)
-        else:
-            raw_file = file
-        files = {'file': ("image.png", raw_file)}
-        retry = True
-        while retry:
-            try:
-                retry = False
-                resp = requests.post(self.API_URL, params=params, files=files, timeout=60)
-                if resp.status_code == 413:
-                    # Request Entity Too Large, слишеом большой файл
-                    return []
-                return self.resp_handle(resp.json())
-            except SauceNaoTooManyRequests as exc:
-                logger.info(exc.message)
-                if not exc.daily_limit:
-                    # Упёрлись в 30-секундный лимит, ждём
-                    retry = True
-                    time.sleep(30)
-                else:
-                    # Упёрлись в суточный лимит, записываем время
-                    self.daily_limit_time = time.time()
-                if self.wait_daily_limit:
-                    # Ждём окончания суточного лимита, если хотим ждать
-                    retry = True
-                    time.sleep(24*3600)
-        return []
+        params = self._build_params()
+        files = {'file': ("image.png", self._read_file_content(file))}
+
+        return self._execute_search("POST", params=params, files=files)
 
     def resp_handle(self, json_resp: ResponseJSON) -> list[Result]:
         """Обработка результатов запроса к сервису и возврат только списка результатов
