@@ -96,9 +96,7 @@ class SauseNAOException(Exception):
 
 class SauceNaoTooManyRequests(SauseNAOException):
     def __init__(self, message: str, *args: object):
-        self.daily_limit = False
-        if "Daily Search Limit Exceeded" in message:
-            self.daily_limit = True
+        self.daily_limit = "Daily Search Limit Exceeded" in message
         super().__init__(-2, message, *args)
 
 class SauceNAO:
@@ -275,10 +273,9 @@ class SauceNAO:
         elif status:
             raise SauseNAOException(status, header.get("message", ""))
 
-        results = json_resp.get("results")
         results = [
             result
-            for result in results
+            for result in json_resp.get("results")
             if float(result.get("header").get("similarity")) > self.minsim
         ]
         return results
