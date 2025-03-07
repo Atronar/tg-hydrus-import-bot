@@ -85,6 +85,22 @@ class ResponseJSON(TypedDict):
     header: ResponseJSONHeader
     results: list[Result]
 
+class SauseNAOException(Exception):
+    def __init__(self, status: int, message: str, *args: object):
+        self.status = status
+        self.message = message
+        super().__init__(*args)
+
+    def __str__(self) -> str:
+        return f"{self.status}: {self.message}"
+
+class SauceNaoTooManyRequests(SauseNAOException):
+    def __init__(self, message: str, *args: object):
+        self.daily_limit = False
+        if "Daily Search Limit Exceeded" in message:
+            self.daily_limit = True
+        super().__init__(-2, message, *args)
+
 class SauceNAO:
     """Класс, позволяющий производить поиск с помощью SauceNAO
     Для инициализации объекта требуется ключ API с сайта
@@ -258,19 +274,3 @@ class SauceNAO:
             ): # kemono
                 sources.append(f'https://kemono.su/{service_id}/user/{user_id}/post/{post_id}')
         return sources
-
-class SauseNAOException(Exception):
-    def __init__(self, status: int, message: str, *args: object):
-        self.status = status
-        self.message = message
-        super().__init__(*args)
-        
-    def __str__(self) -> str:
-        return f"{self.status}: {self.message}"
-        
-class SauceNaoTooManyRequests(SauseNAOException):
-    def __init__(self, message: str, *args: object):
-        self.daily_limit = False
-        if "Daily Search Limit Exceeded" in message:
-            self.daily_limit = True
-        super().__init__(-2, message, *args)
