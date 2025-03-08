@@ -1,4 +1,6 @@
 aiogram
+asyncache
+cachetools
 ffmpy
 pydantic>=2.0.0
 requests
