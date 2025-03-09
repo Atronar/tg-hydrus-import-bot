@@ -1,12 +1,14 @@
 ﻿"""
 Модуль связанный с обработкой и запросами к телеграму
 """
+from io import BytesIO
 import re
 from typing import Iterable
 from requests import Response
 
 from aiogram.types import BufferedInputFile, Message, MessageEntity
 from loguru import logger
+from PIL import Image
 
 from tools import camelCase_to_snake_case, bytes_strformat, url_with_schema
 from ffmpeg import get_io_mp4
@@ -96,6 +98,42 @@ def _convert_video_to_mp4(content: bytes, mime_type: str) -> bytes|None:
             return converted
     return None  # Возврат None при ошибке
 
+def _resize_image(content: bytes, max_size: int) -> bytes | None:
+    """Сжимает изображение до указанного размера с сохранением пропорций."""
+    if len(content) <= max_size:
+        return content
+    try:
+        img = Image.open(BytesIO(content))
+        original_width, original_height = img.size
+
+        # Уменьшаем размер изображения на 50% на каждой итерации
+        pixel_size = original_width * original_height
+        scale_step = (2/3)**(0.5)
+        if max_dimension := max(original_width, original_height):
+            scale = 10000 / max_dimension
+        else:
+            scale = scale_step
+        while scale > 0.001 and pixel_size > 1:
+            new_size = (int(original_width * scale), (int(original_height * scale)))
+            resized_img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+            output = BytesIO()
+            resized_img.save(
+                output,
+                format='JPEG',
+                optimize=True,
+                quality=85
+            )
+            if output.tell() <= max_size:
+                return output.getvalue()
+            scale *= scale_step
+            pixel_size = new_size[0] * new_size[1]
+
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка сжатия изображения: {e}")
+        return None
+
 def send_content_from_response(content_file: Response, msg: Message, filename: str):
     """Отправка содержимого результата запроса (из Гидруса) в Телеграм,
     основываясь на его Content-Type
@@ -125,10 +163,17 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
             content = mp4_content
         answer_function = msg.answer_animation
     elif content_type.startswith("image/"):
-        if content_length > MAX_PHOTO_SIZE:
+        photo_content = None
+        if (
+            content_length <= MAX_PHOTO_SIZE
+            or (photo_content := _resize_image(content, MAX_PHOTO_SIZE))
+        ):
+            answer_function = msg.answer_photo
+            if photo_content:
+                content = photo_content
+        else:
             logger.warning(f"Файл превысил лимит для фото: {content_length} байт")
-            return None
-        answer_function = msg.answer_photo
+            answer_function = msg.answer_document
     elif content_type in ("audio/mp3", "audio/m4a"):
         answer_function = msg.answer_audio
     else:
