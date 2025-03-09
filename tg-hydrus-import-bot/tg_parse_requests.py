@@ -68,6 +68,7 @@ def get_urls_from_entities(msg: str, entities: list[MessageEntity]) -> list[str]
                 )
             )
     if urls:
+        urls = list(dict.fromkeys(urls)) # Удаление дубликатов
         logger.debug(f"Ссылки: {urls}")
     return urls
 
