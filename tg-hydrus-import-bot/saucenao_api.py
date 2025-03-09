@@ -190,6 +190,31 @@ class BaseSauceNAO:
         ]
         return results
 
+    def _get_sources_from_results(self, results: list[Result]) -> list[str]:
+        """Получение списка ссылок-источников из списка результатов поиска
+
+        Возвращается список строк с адресами страниц в сети
+        """
+        sources: list[str] = []
+        for result in results:
+            if (ext_urls := result.get("data").get("ext_urls")):
+                sources.extend(ext_urls)
+            if (getchu_id := result.get("data").get("getchu_id")):
+                sources.append(f'http://www.getchu.com/soft.phtml?id={getchu_id}')
+            if (
+                result.get("header").get("index_id") == 18
+                and (name := result.get("data").get("eng_name"))
+            ): # nhentai
+                sources.append(f'https://nhentai.net/search/?q={urllib.parse.quote(name)}')
+            if (
+                result.get("header").get("index_id") == 43
+                and (service_id := result.get("data").get("service"))
+                and (user_id := result.get("data").get("user_id"))
+                and (post_id := result.get("data").get("id"))
+            ): # kemono
+                sources.append(f'https://kemono.su/{service_id}/user/{user_id}/post/{post_id}')
+        return sources
+
 class SauceNAO(BaseSauceNAO):
     """Класс, позволяющий производить поиск с помощью SauceNAO
     Для инициализации объекта требуется ключ API с сайта
@@ -318,25 +343,7 @@ class SauceNAO(BaseSauceNAO):
         Возвращается список строк с адресами страниц в сети
         """
         results = self.search(file)
-        sources: list[str] = []
-        for result in results:
-            if (ext_urls := result.get("data").get("ext_urls")):
-                sources.extend(ext_urls)
-            if (getchu_id := result.get("data").get("getchu_id")):
-                sources.append(f'http://www.getchu.com/soft.phtml?id={getchu_id}')
-            if (
-                result.get("header").get("index_id") == 18
-                and (name := result.get("data").get("eng_name"))
-            ): # nhentai
-                sources.append(f'https://nhentai.net/search/?q={urllib.parse.quote(name)}')
-            if (
-                result.get("header").get("index_id") == 43
-                and (service_id := result.get("data").get("service"))
-                and (user_id := result.get("data").get("user_id"))
-                and (post_id := result.get("data").get("id"))
-            ): # kemono
-                sources.append(f'https://kemono.su/{service_id}/user/{user_id}/post/{post_id}')
-        return sources
+        return self._get_sources_from_results(results)
 
 class AsyncSauceNAO(BaseSauceNAO):
     def __init__(self, *args, **kwargs):
@@ -477,3 +484,14 @@ class AsyncSauceNAO(BaseSauceNAO):
         data = aiohttp.FormData()
         data.add_field('file', self._read_file_content(file), filename="image.png")
         return await self._execute_search("POST", params=params, data=data)
+
+    async def get_sources(self, file: str|IOBase|bytes) -> list[str]:
+        """Получение списка ссылок-источников для заданного файла
+
+        Может принимать как строку с адресом изображения в сети,
+        так и сам файл в виде файлового объекта или в байтовом представлении
+
+        Возвращается список строк с адресами страниц в сети
+        """
+        results = await self.search(file)
+        return self._get_sources_from_results(results)
