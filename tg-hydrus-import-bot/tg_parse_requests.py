@@ -1,11 +1,15 @@
 ﻿"""
 Модуль связанный с обработкой и запросами к телеграму
 """
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
 from io import BytesIO
 import re
-from typing import Iterable
+from functools import partial
 from requests import Response
+from typing import Callable, Iterable
 
+import aiogram.methods
 from aiogram.types import BufferedInputFile, Message, MessageEntity
 from loguru import logger
 from PIL import Image
@@ -81,6 +85,17 @@ def answer_disabled_content(msg: Message, content_type_config_name: str):
     logger.info(f"Отправленный ответ: {reply}")
     return msg.answer(reply, reply_to_message_id=msg.message_id, parse_mode="HTML")
 
+_FFMPEG_EXECUTOR = ProcessPoolExecutor(max_workers=2)  # Для CPU-bound задач
+
+async def _async_convert(func: Callable, *args) -> bytes | None:
+    loop = asyncio.get_running_loop()
+    try:
+        executor = _FFMPEG_EXECUTOR if func.__name__ == '_convert_video_to_mp4' else None
+        return await loop.run_in_executor(executor, partial(func, *args))
+    except Exception as e:
+        logger.error(f"Ошибка конвертации {func.__name__}: {e}")
+        return None
+
 def _convert_video_to_mp4(content: bytes, mime_type: str) -> bytes|None:
     """Конвертирует видео с приоритетом скорости."""
     input_format = mime_type.split("/", 1)[-1].lower()
@@ -134,7 +149,20 @@ def _resize_image(content: bytes, max_size: int) -> bytes | None:
         logger.error(f"Ошибка сжатия изображения: {e}")
         return None
 
-def send_content_from_response(content_file: Response, msg: Message, filename: str):
+STREAM_CHUNK_SIZE = 8388608  # 8 Mb
+
+async def _stream_content(response: Response, max_size: int) -> bytes | None:
+    """Потоковое чтение контента с проверкой размера"""
+    content = BytesIO()
+    for chunk in response.iter_content(STREAM_CHUNK_SIZE):
+        content.write(chunk)
+        if content.tell() > max_size:
+            return None
+    return content.getvalue()
+
+async def send_content_from_response(
+    content_file: Response, msg: Message, filename: str
+) -> Message | None:
     """Отправка содержимого результата запроса (из Гидруса) в Телеграм,
     основываясь на его Content-Type
     """
@@ -152,21 +180,21 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
 
     if content_type.startswith("video/",):
         # mp4 правильного размера не конвертируются, а отдаются обратно
-        if (mp4_content := _convert_video_to_mp4(content, content_type)):
+        if (mp4_content := await _async_convert(_convert_video_to_mp4, content, content_type)):
             answer_function = msg.answer_video
             answer_kwargs["supports_streaming"] = True
             content = mp4_content
         else:
             answer_function = msg.answer_document
     elif content_type in ("image/gif",):
-        if (mp4_content := _convert_video_to_mp4(content, content_type)):
+        if (mp4_content := await _async_convert(_convert_video_to_mp4, content, content_type)):
             content = mp4_content
         answer_function = msg.answer_animation
     elif content_type.startswith("image/"):
         photo_content = None
         if (
             content_length <= MAX_PHOTO_SIZE
-            or (photo_content := _resize_image(content, MAX_PHOTO_SIZE))
+            or (photo_content := await _async_convert(_resize_image, content, MAX_PHOTO_SIZE))
         ):
             answer_function = msg.answer_photo
             if photo_content:
@@ -179,7 +207,7 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
     else:
         answer_function = msg.answer_document
     input_file = BufferedInputFile(content, filename)
-    return answer_function(
+    return await answer_function(
         input_file,
         reply_to_message_id=msg.message_id,
         **answer_kwargs

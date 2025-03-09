@@ -203,12 +203,11 @@ async def start_script():
                         and content_size_item.isdecimal()
                     ):
                         content_size.append(int(content_size_item))
-                    if send_content := send_content_from_response(
+                    await send_content_from_response(
                         content_file,
                         msg,
                         resp_item.get("hash", "file")
-                    ):
-                        await send_content
+                    )
 
             reply = get_success_reply_str(
                 "текст",
