@@ -40,10 +40,12 @@ def get_urls_from_msg(msg: Message) -> list[str]:
     """Достаёт из объекта сообщения телеграм список ссылок"""
     if msg.caption_entities:
         if msg.caption is None:
+            logger.error(f"Ошибка структуры сообщения: {msg.text}")
             raise ValueError(msg)
         return get_urls_from_entities(msg.caption, msg.caption_entities)
     if msg.entities:
         if msg.text is None:
+            logger.error(f"Ошибка структуры сообщения: {msg.text}")
             raise ValueError(msg)
         return get_urls_from_entities(msg.text, msg.entities)
     return []
@@ -86,6 +88,7 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
     logger.debug(f"Content-Length: {content_length}")
 
     if content_length > MAX_FILE_SIZE:
+        logger.warning(f"Файл превысил лимит: {content_length} байт")
         return None
 
     content = content_file.content
@@ -109,6 +112,7 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
         answer_function = msg.answer_animation
     elif content_type.startswith("image/"):
         if content_length > MAX_PHOTO_SIZE:
+            logger.warning(f"Файл превысил лимит для фото: {content_length} байт")
             return None
         answer_function = msg.answer_photo
     elif content_type in ("audio/mp3", "audio/m4a"):
