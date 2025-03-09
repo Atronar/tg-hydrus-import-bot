@@ -78,7 +78,7 @@ def get_urls_from_entities(msg: str, entities: list[MessageEntity]) -> list[str]
         logger.debug(f"Ссылки: {urls}")
     return urls
 
-def answer_disabled_content(msg: Message, content_type_config_name: str):
+def answer_disabled_content(msg: Message, content_type_config_name: str) -> aiogram.methods.SendMessage:
     """Отправляет заранее заготовленный ответ об отключённости типа контента в конфигах"""
     reply = f"Тип <code>{camelCase_to_snake_case(content_type_config_name)}</code>.\n" \
         "Отключено в конфигах."
