@@ -168,14 +168,24 @@ async def send_content_from_response(
     """
     content_type = content_file.headers.get("Content-Type", "")
     logger.debug(f"Content-Type: {content_type}")
-    content_length = int(content_file.headers.get("Content-Length", len(content_file.content)))
+    content_length = int(content_file.headers.get("Content-Length", "0"))
     logger.debug(f"Content-Length: {content_length}")
 
     if content_length > MAX_FILE_SIZE:
         logger.warning(f"Файл превысил лимит: {content_length} байт")
         return None
 
-    content = content_file.content
+    # "Content-Length" отсутствует, смотрим реальный размер
+    if content_length == 0:
+        content = await _stream_content(content_file, MAX_FILE_SIZE)
+        if content:
+            content_length = len(content)
+        else:
+            logger.warning(f"Файл превысил лимит: {MAX_FILE_SIZE} байт")
+            return None
+    else:
+        content = content_file.content
+
     answer_kwargs = {}
 
     if content_type.startswith("video/",):
