@@ -14,32 +14,35 @@ from ffmpeg import get_io_mp4
 MAX_FILE_SIZE = 50000000 # 50 Mb
 MAX_PHOTO_SIZE = 10000000 # 10 Mb
 
+HASHTAG_PATTERN = re.compile(r"#([^\s#@]+)") # regex для хэштегов
+
 def get_tags_from_msg(msg: Message) -> list[str]:
     """Достаёт из объекта сообщения телеграм список хештегов,
     заменяя подчёркивания на пробелы и отрезая символ #
     """
-    if msg.caption is not None:
-        return get_tags_from_str(msg.caption)
-    if msg.text is not None:
-        return get_tags_from_str(msg.text)
+    if text := (msg.text or msg.caption):
+        return get_tags_from_str(text)
     return []
 
 def get_tags_from_str(msg: str) -> list[str]:
     """Достаёт из текста список хештегов,
     заменяя подчёркивания на пробелы и отрезая символ #
     """
-    tags = list(map(lambda x: x.replace('_', ' '), re.findall(r"(?<=#)[^\s#@]+", msg)))
+    tags = [
+        tag.replace('_', ' ').strip()
+        for tag in HASHTAG_PATTERN.findall(msg)
+    ]
     if tags:
         logger.debug(f"Теги: {tags}")
     return tags
 
 def get_urls_from_msg(msg: Message) -> list[str]:
     """Достаёт из объекта сообщения телеграм список ссылок"""
-    if msg.caption_entities is not None:
+    if msg.caption_entities:
         if msg.caption is None:
             raise ValueError(msg)
         return get_urls_from_entities(msg.caption, msg.caption_entities)
-    if msg.entities is not None:
+    if msg.entities:
         if msg.text is None:
             raise ValueError(msg)
         return get_urls_from_entities(msg.text, msg.entities)
@@ -47,18 +50,19 @@ def get_urls_from_msg(msg: Message) -> list[str]:
 
 def get_urls_from_entities(msg: str, entities: list[MessageEntity]) -> list[str]:
     """Преобразовывает список вхождений в список ссылок из текста"""
-    urls = []
+    urls: list[str] = []
     for entity in entities:
-        if entity.type in ("text_link") and entity.url:
+        if entity.type == "text_link" and (url := entity.url):
             urls.append(
                 url_with_schema(
-                    entity.url
+                    url
                 )
             )
-        elif entity.type in ("url"):
+        elif entity.type == "url":
+            url = msg[entity.offset:entity.offset+entity.length]
             urls.append(
                 url_with_schema(
-                    msg[entity.offset:entity.offset+entity.length]
+                    url
                 )
             )
     if urls:
@@ -80,8 +84,10 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
     logger.debug(f"Content-Type: {content_type}")
     content_length = int(content_file.headers.get("Content-Length", "0"))
     logger.debug(f"Content-Length: {content_length}")
+
     if content_length > MAX_FILE_SIZE:
         return None
+
     content = content_file.content
     answer_kwargs = {}
     if content_type in ("video/mp4",):
@@ -123,11 +129,12 @@ def get_success_reply_str(
     ) -> str:
     """Генерация строки с успешным импортом
     """
-    reply = f"Тип: {type_content_name}.\n" \
-        f"{resp_str}"
+    reply_parts = [f"Тип: {type_content_name}.", resp_str]
     if isinstance(content_size, int):
-        reply = f"{reply}\n{bytes_strformat(content_size)}"
+        reply_parts.append(bytes_strformat(content_size))
     elif isinstance(content_size, Iterable):
-        for content_size_item in content_size:
-            reply = f"{reply}\n{bytes_strformat(content_size_item)}"
-    return reply
+        reply_parts.extend(
+            bytes_strformat(content_size_item)
+            for content_size_item in content_size
+        )
+    return "\n".join(reply_parts)
