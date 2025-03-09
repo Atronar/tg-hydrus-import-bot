@@ -19,6 +19,7 @@ from ffmpeg import get_io_mp4
 
 MAX_FILE_SIZE = 50000000 # 50 Mb
 MAX_PHOTO_SIZE = 10000000 # 10 Mb
+JPEG_QUALITY = 85
 
 HASHTAG_PATTERN = re.compile(r"#([^\s#@]+)") # regex для хэштегов
 
@@ -118,31 +119,30 @@ def _resize_image(content: bytes, max_size: int) -> bytes | None:
     if len(content) <= max_size:
         return content
     try:
-        img = Image.open(BytesIO(content))
-        original_width, original_height = img.size
+        with Image.open(BytesIO(content)) as img:
+            original_width, original_height = img.size
 
-        # Уменьшаем размер изображения на 50% на каждой итерации
-        pixel_size = original_width * original_height
-        scale_step = (2/3)**(0.5)
-        if max_dimension := max(original_width, original_height):
-            scale = 10000 / max_dimension
-        else:
-            scale = scale_step
-        while scale > 0.001 and pixel_size > 1:
-            new_size = (int(original_width * scale), (int(original_height * scale)))
-            resized_img = img.resize(new_size, Image.Resampling.LANCZOS)
+            # Уменьшаем размер изображения до 2/3 площади на каждой итерации
+            pixel_size = original_width * original_height
+            scale_step = (2/3)**(0.5)
+            if max_dimension := max(original_width, original_height):
+                scale = 10000 / max_dimension
+            else:
+                scale = 1
+            while scale > 0.001 and pixel_size > 1:
+                new_size = (int(original_width * scale), (int(original_height * scale)))
+                output = BytesIO()
 
-            output = BytesIO()
-            resized_img.save(
-                output,
-                format='JPEG',
-                optimize=True,
-                quality=85
-            )
-            if output.tell() <= max_size:
-                return output.getvalue()
-            scale *= scale_step
-            pixel_size = new_size[0] * new_size[1]
+                img.resize(new_size, Image.Resampling.LANCZOS).save(
+                    output,
+                    format='JPEG',
+                    optimize=True,
+                    quality=JPEG_QUALITY
+                )
+                if output.tell() <= max_size:
+                    return output.getvalue()
+                scale *= scale_step
+                pixel_size = new_size[0] * new_size[1]
 
         return None
     except Exception as e:
@@ -216,6 +216,7 @@ async def send_content_from_response(
         answer_function = msg.answer_audio
     else:
         answer_function = msg.answer_document
+    logger.debug(f"Используется метод: {answer_function.__name__}")
     input_file = BufferedInputFile(content, filename)
     return await answer_function(
         input_file,
