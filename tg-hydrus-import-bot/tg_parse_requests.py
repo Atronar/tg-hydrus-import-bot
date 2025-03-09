@@ -85,7 +85,7 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
     """
     content_type = content_file.headers.get("Content-Type", "")
     logger.debug(f"Content-Type: {content_type}")
-    content_length = int(content_file.headers.get("Content-Length", "0"))
+    content_length = int(content_file.headers.get("Content-Length", len(content_file.content)))
     logger.debug(f"Content-Length: {content_length}")
 
     if content_length > MAX_FILE_SIZE:
