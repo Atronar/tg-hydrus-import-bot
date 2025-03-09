@@ -79,6 +79,23 @@ def answer_disabled_content(msg: Message, content_type_config_name: str):
     logger.info(f"Отправленный ответ: {reply}")
     return msg.answer(reply, reply_to_message_id=msg.message_id, parse_mode="HTML")
 
+def _convert_video_to_mp4(content: bytes, mime_type: str) -> bytes|None:
+    """Конвертирует видео с приоритетом скорости."""
+    input_format = mime_type.split("/", 1)[-1].lower()
+    # Если уже MP4, проверяем только размер
+    if input_format == "mp4" and len(content) <= MAX_FILE_SIZE:
+        return content
+
+    for output_codec in ("x264", "x265-gpu", "x265"):
+        converted = get_io_mp4(
+            content,
+            input_format=input_format,
+            output_codec=output_codec
+        )
+        if len(converted) <= MAX_FILE_SIZE:
+            return converted
+    return None  # Возврат None при ошибке
+
 def send_content_from_response(content_file: Response, msg: Message, filename: str):
     """Отправка содержимого результата запроса (из Гидруса) в Телеграм,
     основываясь на его Content-Type
@@ -94,22 +111,18 @@ def send_content_from_response(content_file: Response, msg: Message, filename: s
 
     content = content_file.content
     answer_kwargs = {}
-    if content_type in ("video/mp4",):
-        answer_function = msg.answer_video
-        answer_kwargs["supports_streaming"] = True
-    elif content_type.startswith("video/",):
-        answer_function = msg.answer_video
-        answer_kwargs["supports_streaming"] = True
-        for output_codec in ("x264", "x265-gpu", "x265"):
-            mp4_content = get_io_mp4(
-                content,
-                input_format=content_type.split("/",1)[-1],
-                output_codec=output_codec
-            )
-            if len(mp4_content) <= MAX_FILE_SIZE:
-                content = mp4_content
-                break
+
+    if content_type.startswith("video/",):
+        # mp4 правильного размера не конвертируются, а отдаются обратно
+        if (mp4_content := _convert_video_to_mp4(content, content_type)):
+            answer_function = msg.answer_video
+            answer_kwargs["supports_streaming"] = True
+            content = mp4_content
+        else:
+            answer_function = msg.answer_document
     elif content_type in ("image/gif",):
+        if (mp4_content := _convert_video_to_mp4(content, content_type)):
+            content = mp4_content
         answer_function = msg.answer_animation
     elif content_type.startswith("image/"):
         if content_length > MAX_PHOTO_SIZE:
