@@ -30,7 +30,6 @@ logger.add(
 
 logger.info("Программа запущена.")
 
-@logger.catch
 def main():
     """Точка входа в программу"""
     prepare_temp_folder()
@@ -66,9 +65,14 @@ def main():
             raise ex
 
 
-while True:
-    try:
-        main()
-    except KeyboardInterrupt:
-        logger.info("Программа остановлена пользователем.")
-        sys.exit()
+if __name__ == "__main__":
+    while True:
+        try:
+            main()
+        except KeyboardInterrupt:
+            logger.info("Программа остановлена пользователем.")
+            sys.exit()
+        except Exception:
+            logger.exception("Непредвиденная ошибка")
+            logger.info(f"Программа приостановлена на {CONF.TIME_TO_SLEEP} сек.")
+            time.sleep(CONF.TIME_TO_SLEEP)
