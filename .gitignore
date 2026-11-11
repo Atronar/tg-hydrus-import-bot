@@ -16,4 +16,4 @@ ENV/
 *.sln
 *.pyproj
 
-/.conf.json
+.conf.json
