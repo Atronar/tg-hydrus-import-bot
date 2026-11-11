@@ -1,6 +1,7 @@
 ﻿import subprocess
 from typing import Literal, cast
 import ffmpy
+from config import CONF
 
 OutPresetName = Literal["x264", "x265", "x265-gpu"]
 
@@ -11,9 +12,20 @@ _OUT_CODECS = {
     "x265-gpu": "hevc_nvenc -preset p6 -tune hq -cq:v 25",
 }
 
+
+_FFMPEG_LOGLEVELS = {
+    "TRACE": "trace",
+    "DEBUG": "debug",
+    "INFO": "info",
+    "SUCCESS": "verbose",
+    "WARNING": "warning",
+    "ERROR": "error",
+    "CRITICAL": "fatal",
+}
+
 _FFMPEG_GLOBAL_OPTIONS = [
     "-hide_banner",     # Не выводить баннер
-    "-loglevel error",  # Не выводить лог
+    f"-loglevel {_FFMPEG_LOGLEVELS[CONF.LOG_LEVEL]}",  # Не выводить лог
     "-nostdin",         # Не ждать ввода
     "-y",               # Перезапись без подтверждения
     "-nostats",         # Не выводить прогресс
