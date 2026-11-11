@@ -220,6 +220,36 @@ class MediaTests(unittest.TestCase):
             self.assertLessEqual(max(image.size), 10000)
         self.assertLessEqual(len(resized), max_size)
 
+    def test_resize_image_preserves_aspect_ratio(self):
+        # Для целочисленных размеров точное равенство пропорций невозможно:
+        # допускаем отклонение не более одного пикселя по каждой стороне.
+        for width, height in (
+            (1200, 800),
+            (800, 1200),
+            (1001, 333),
+            (333, 1001),
+        ):
+            with self.subTest(size=(width, height)):
+                source = BytesIO()
+                Image.frombytes(
+                    "RGB",
+                    (width, height),
+                    os.urandom(width * height * 3),
+                ).save(source, format="PNG")
+                content = source.getvalue()
+                resized = _resize_image(content, max_size=50000)
+                self.assertIsNotNone(resized)
+                with Image.open(BytesIO(resized)) as image:
+                    new_width, new_height = image.size
+
+                self.assertLessEqual(new_width, width)
+                self.assertLessEqual(new_height, height)
+                self.assertLessEqual(
+                    abs(new_width * height - new_height * width),
+                    max(width, height),
+                    f"{width}x{height} -> {new_width}x{new_height}",
+                )
+
     def test_resize_image_does_not_upscale(self):
         source = BytesIO()
         Image.frombytes("RGB", (5000, 1), os.urandom(15000)).save(
