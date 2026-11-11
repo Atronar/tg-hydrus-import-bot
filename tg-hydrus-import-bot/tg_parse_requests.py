@@ -128,14 +128,20 @@ def _resize_image(content: bytes, max_size: int) -> bytes | None:
             pixel_size = original_width * original_height
             scale_step = (2/3)**(0.5)
             if max_dimension := max(original_width, original_height):
-                scale = 10000 / max_dimension
+                # Изображение нельзя увеличивать: только уменьшаем
+                scale = min(1.0, 10000 / max_dimension)
             else:
                 scale = 1
+            # JPEG не поддерживает альфа-канал
+            image = img.convert("RGB")
             while scale > 0.001 and pixel_size > 1:
-                new_size = (int(original_width * scale), (int(original_height * scale)))
+                new_size = (
+                    max(1, int(original_width * scale)),
+                    max(1, int(original_height * scale))
+                )
                 output = BytesIO()
 
-                img.resize(new_size, Image.Resampling.LANCZOS).save(
+                image.resize(new_size, Image.Resampling.LANCZOS).save(
                     output,
                     format='JPEG',
                     optimize=True,

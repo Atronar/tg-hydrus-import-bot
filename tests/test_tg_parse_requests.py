@@ -1,5 +1,6 @@
 """Тесты обработки сообщений Telegram и отправки контента."""
 
+import os
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
@@ -206,6 +207,28 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(image.format, "JPEG")
             self.assertLessEqual(max(image.size), 10000)
         self.assertLessEqual(len(resized), max_size)
+
+    def test_resize_image_does_not_upscale(self):
+        source = BytesIO()
+        Image.frombytes("RGB", (5000, 1), os.urandom(15000)).save(
+            source, format="PNG"
+        )
+        content = source.getvalue()
+        resized = _resize_image(content, len(content) - 1)
+        self.assertIsNotNone(resized)
+        with Image.open(BytesIO(resized)) as image:
+            self.assertEqual(image.size, (5000, 1))
+
+    def test_resize_image_converts_rgba_to_jpeg(self):
+        source = BytesIO()
+        Image.new("RGBA", (400, 400), (255, 0, 0, 128)).save(
+            source, format="PNG"
+        )
+        content = source.getvalue()
+        resized = _resize_image(content, len(content) // 2)
+        self.assertIsNotNone(resized)
+        with Image.open(BytesIO(resized)) as image:
+            self.assertEqual(image.format, "JPEG")
 
 
 class ReplyTests(unittest.TestCase):
