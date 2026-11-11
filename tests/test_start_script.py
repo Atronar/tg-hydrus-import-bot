@@ -1,6 +1,7 @@
 """Тесты вспомогательных функций start_script.py."""
 
 import os
+import threading
 import unittest
 from io import BytesIO
 from unittest.mock import AsyncMock, patch
@@ -13,6 +14,7 @@ from start_script import (
     answer_with_retry,
     download_with_retry,
     get_telegram_proxy,
+    run_hydrus,
 )
 from tests.helpers import FakeMessage, fake_bot_download, telegram_exception
 
@@ -148,6 +150,17 @@ class TelegramProxyTests(unittest.TestCase):
             patch("start_script.urllib.request.proxy_bypass", return_value=False),
         ):
             self.assertIsNone(get_telegram_proxy())
+
+
+class RunHydrusTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runs_in_dedicated_thread(self):
+        thread_name = await run_hydrus(
+            lambda: threading.current_thread().name
+        )
+        self.assertTrue(thread_name.startswith("hydrus"))
+
+    async def test_passes_args_and_kwargs(self):
+        self.assertEqual(await run_hydrus(lambda a, b=0: a + b, 1, b=2), 3)
 
 
 if __name__ == "__main__":

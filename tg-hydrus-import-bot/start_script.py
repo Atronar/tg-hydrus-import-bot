@@ -3,6 +3,8 @@
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import html
 import io
 import os
@@ -23,6 +25,22 @@ from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
     answer_disabled_content, send_content_from_response, get_success_reply_str
 
 MAX_MESSAGE_LENGTH = 4000
+
+# Все синхронные запросы к Hydrus идут через один поток:
+# это не блокирует event loop и не даёт использовать requests.Session конкурентно.
+_HYDRUS_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="hydrus"
+)
+
+
+async def run_hydrus(func, *args, **kwargs):
+    """Выполняет синхронную операцию Hydrus в отдельном потоке."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _HYDRUS_EXECUTOR,
+        partial(func, *args, **kwargs)
+    )
 
 
 async def answer_with_retry(msg: Message, text: str, **kwargs) -> Message:
@@ -134,7 +152,8 @@ async def start_script():
         logger.info("Telegram Bot API: используется прокси")
     bot = Bot(token=CONF.TG_BOT_TOKEN, session=session)
     dp = Dispatcher()
-    hydrus = HydrusRequests(
+    hydrus = await run_hydrus(
+        HydrusRequests,
         CONF.HYDRUS_TOKEN,
         api_url=CONF.HYDRUS_API_URL,
         default_tags_namespace=CONF.TAGS_NAMESPACE,
@@ -193,7 +212,7 @@ async def start_script():
         for hash_str in hashes:
             logger.info(f"Обработка {hash_str}")
             try:
-                content_file = await asyncio.to_thread(hydrus.get_file, hash_str)
+                content_file = await run_hydrus(hydrus.get_file, hash_str)
                 if not content_file:
                     await answer_with_retry(msg, f"{hash_str}: файл не найден")
                     continue
@@ -204,7 +223,7 @@ async def start_script():
                 if not urls:
                     await answer_with_retry(msg, f"{hash_str}: источники не найдены")
                     continue
-                resp = await asyncio.to_thread(hydrus.import_content, urls=urls)
+                resp = await run_hydrus(hydrus.import_content, urls=urls)
             except hydrus_api.HydrusAPIException as ex:
                 logger.error(f"Ошибка Hydrus для {hash_str}: {ex}")
                 await answer_with_retry(msg, f"{hash_str}: ошибка Hydrus API")
@@ -232,7 +251,7 @@ async def start_script():
         for hash_str in hashes:
             logger.info(f"Обработка {hash_str}")
             try:
-                tags = await asyncio.to_thread(hydrus.get_tags, hash_str)
+                tags = await run_hydrus(hydrus.get_tags, hash_str)
             except hydrus_api.HydrusAPIException as ex:
                 logger.error(f"Ошибка Hydrus для {hash_str}: {ex}")
                 await answer_with_retry(msg, f"{hash_str}: ошибка Hydrus API")
@@ -256,7 +275,7 @@ async def start_script():
         for hash_str in hashes:
             logger.info(f"Обработка {hash_str}")
             try:
-                tags = await asyncio.to_thread(hydrus.get_tags, hash_str)
+                tags = await run_hydrus(hydrus.get_tags, hash_str)
             except hydrus_api.HydrusAPIException as ex:
                 logger.error(f"Ошибка Hydrus для {hash_str}: {ex}")
                 await answer_with_retry(msg, f"{hash_str}: ошибка Hydrus API")
@@ -282,7 +301,7 @@ async def start_script():
         await download_with_retry(bot, photo.file_id, content_file)
 
         try:
-            resp = await asyncio.to_thread(hydrus.get_file_hash, content_file)
+            resp = await run_hydrus(hydrus.get_file_hash, content_file)
         except hydrus_api.HydrusAPIException as ex:
             logger.warning(f"Не удалось получить хэш из буфера: {ex}")
             temp_path = os.path.join(
@@ -291,7 +310,7 @@ async def start_script():
             )
             try:
                 await download_with_retry(bot, photo.file_id, temp_path)
-                resp = await asyncio.to_thread(hydrus.get_file_hash, temp_path)
+                resp = await run_hydrus(hydrus.get_file_hash, temp_path)
             except hydrus_api.HydrusAPIException as retry_ex:
                 logger.error(f"Не удалось получить хэш из файла: {retry_ex}")
                 resp = None
@@ -326,9 +345,14 @@ async def start_script():
             )
 
             if not (tags or urls) and sauce_nao:
-                urls = sauce_nao.get_sources(content_file)
+                urls = await asyncio.to_thread(sauce_nao.get_sources, content_file)
 
-            resp = hydrus.import_content(content_file, tags=tags, urls=urls)
+            resp = await run_hydrus(
+                hydrus.import_content,
+                content_file,
+                tags=tags,
+                urls=urls
+            )
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
 
@@ -361,7 +385,12 @@ async def start_script():
                 content_file
             )
 
-            resp = hydrus.import_content(content_file, tags=tags, urls=urls)
+            resp = await run_hydrus(
+                hydrus.import_content,
+                content_file,
+                tags=tags,
+                urls=urls
+            )
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
 
@@ -408,7 +437,12 @@ async def start_script():
                 content_file
             )
 
-            resp = hydrus.import_content(content_file, tags=tags, urls=urls)
+            resp = await run_hydrus(
+                hydrus.import_content,
+                content_file,
+                tags=tags,
+                urls=urls
+            )
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
 
@@ -445,7 +479,12 @@ async def start_script():
                 content_file
             )
 
-            resp = hydrus.import_content(content_file, tags=tags, urls=urls)
+            resp = await run_hydrus(
+                hydrus.import_content,
+                content_file,
+                tags=tags,
+                urls=urls
+            )
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
 
@@ -462,7 +501,11 @@ async def start_script():
             tags = get_tags_from_msg(msg)
             urls = get_urls_from_msg(msg)
             # Скачиваем ссылки, проставляем теги ко всем ним
-            resp = hydrus.import_content(urls=urls, tags=tags)
+            resp = await run_hydrus(
+                hydrus.import_content,
+                urls=urls,
+                tags=tags
+            )
 
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
@@ -470,7 +513,11 @@ async def start_script():
             # Отправка собственно скачанного контента
             content_size = []
             for resp_item in resp:
-                if content_file := hydrus.get_file(resp_item.get("hash", None)):
+                content_file = await run_hydrus(
+                    hydrus.get_file,
+                    resp_item.get("hash", None)
+                )
+                if content_file:
                     if (
                         (content_size_item := content_file.headers.get("Content-Length"))
                         and content_size_item.isdecimal()
