@@ -56,6 +56,72 @@ def add_urls_to_text(text: str, urls: list[str], videos: list[str]) -> str:
     text = '\n'.join([text, *(all_content[1:])])
     return text
 
+def multiline_to_hashtags(string: str, remove_namespaces: bool=False) -> str:
+    """Преобразует построчный список теговых слов и фраз в строку с хэштегами.
+
+    Parameters
+    ----------
+    string : str
+        Строка с теговыми слов и фразами, разделёнными переносом строки
+
+    remove_namespaces: bool
+        Установленное в True удаляет пространства имён тегов и сортирует теги по основным категориям,
+        разделённым каждая новой строкой
+
+    Returns
+    -------
+    str
+        Возвращается строка, состоящая из хэштегов
+    """
+    def clear_string(value: str) -> str:
+        """Приводит тег к виду, допустимому в хэштеге Telegram."""
+        value = value.strip().lstrip('#')
+        # Символы, которые в исходных тегах было принято просто удалять
+        value = value.replace('.', '').replace('(', '').replace(')', '').replace("'", '')
+        value = value.replace('&', '_and_')
+        # Всё, что не буква, цифра или подчёркивание, становится разделителем
+        value = re.sub(r'[^\w]+', '_', value, flags=re.UNICODE)
+        return re.sub(r'_+', '_', value).strip('_')
+
+    def make_hashtag(value: str) -> str:
+        value = clear_string(value)
+        return f'#{value}' if value else ''
+
+    if not remove_namespaces:
+        hashtags = (make_hashtag(row) for row in string.split('\n'))
+        return ' '.join(dict.fromkeys(tag for tag in hashtags if tag))
+
+    # Группировка по упорядоченным категориям
+    categories: dict[str, list[str]] = {
+        "artists": [],
+        "series": [],
+        "characters": [],
+        "meta": [],
+        "unnamespaced_tags": []
+    }
+    namespace_categories = {
+        "artist": "artists",
+        "person": "artists",
+        "series": "series",
+        "pool": "series",
+        "character": "characters",
+        "meta": "meta",
+    }
+
+    for row in string.split('\n'):
+        if not (line := row.strip()):
+            continue
+        namespace, separator, value = line.partition(':')
+        category = namespace_categories.get(namespace.lower(), "unnamespaced_tags")
+        tag = make_hashtag(value if separator else line)
+        if tag and tag not in categories[category]:
+            categories[category].append(tag)
+
+    return '\n'.join(
+        ' '.join(tags)
+        for tags in categories.values()
+        if tags
+    )
 
 def split_text(text: str, fragment_size: int) -> list[str]:
     """Разбивает большой текст на фрагменты указанного размера."""
