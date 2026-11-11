@@ -1,3 +1,5 @@
+# aiogram 3.31.0 formally requires Python <3.15.
+# On Python 3.15 install with: pip install --ignore-requires-python -r requirements.txt
 aiogram
 asyncache
 cachetools
@@ -6,3 +8,5 @@ pydantic>=2.0.0
 requests
 loguru
 hydrus-api
+Pillow
+aiohttp
