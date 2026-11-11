@@ -68,7 +68,9 @@ def get_urls_from_entities(msg: str, entities: list[MessageEntity]) -> list[str]
                 )
             )
         elif entity.type == "url":
-            url = msg[entity.offset:entity.offset+entity.length]
+            # offset/length в Telegram считаются в UTF-16,
+            # поэтому обычный срез по code points ломает текст с эмодзи
+            url = entity.extract_from(msg)
             urls.append(
                 url_with_schema(
                     url

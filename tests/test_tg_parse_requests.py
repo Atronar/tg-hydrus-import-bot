@@ -67,6 +67,18 @@ class UrlsTests(unittest.TestCase):
             ["https://example.com/a", "https://example.com/b"],
         )
 
+    def test_get_urls_from_entities_uses_utf16_offsets(self):
+        text = "😀 https://example.com"
+        entity = MessageEntity(
+            type="url",
+            offset=3,  # эмодзи занимает две UTF-16 единицы
+            length=len("https://example.com"),
+        )
+        self.assertEqual(
+            get_urls_from_entities(text, [entity]),
+            ["https://example.com"],
+        )
+
     def test_get_urls_from_entities_deduplicates(self):
         entities = [
             MessageEntity(type="url", offset=0, length=len("example.com")),
