@@ -52,5 +52,24 @@
   * `/manage_pages/add_files` - помещение импортированного файла на страницу в клиенте
 * `search and fetch files` : 
   * `/get_files/file` - непосредственное получение скачанного по ссылке файла для отправки в ответ
+  * `/get_files/file_metadata` - получение тегов файла по хэшу
+* `manage file relationships` :
+  * `/manage_file_relationships/get_file_relationships` - поиск главного файла (king) для дубликатов, чтобы возвращать его теги и содержимое
 
 Непредоставление токену этих прав урежет возможности бота на вышеперечисленные.
+
+## Тесты
+---
+Тесты используют стандартный `unittest` и не требуют запущенного Hydrus или доступа к Telegram: внешние API заменены моками.
+```
+python run_tests.py
+```
+Для проверки живых интеграций задайте `RUN_INTEGRATION=1` (нужны запущенный Hydrus с валидным токеном и доступ к `api.telegram.org`):
+```
+RUN_INTEGRATION=1 python run_tests.py
+```
+В PowerShell:
+```
+$env:RUN_INTEGRATION='1'; python run_tests.py
+```
+Без этой переменной интеграционные тесты пропускаются.
