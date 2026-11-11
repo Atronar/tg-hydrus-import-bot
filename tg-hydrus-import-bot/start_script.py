@@ -3,20 +3,87 @@
 """
 
 import asyncio
-import os
+import html
 import io
+import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
-from aiogram import F
+from aiogram import F, exceptions
+import hydrus_api
 from loguru import logger
 
 from config import CONF
-from tools import get_temp_folder
+from tools import get_temp_folder, multiline_to_hashtags, split_text
 from hydrus_requests import HydrusRequests
 from saucenao_api import SauceNAO
 from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
     answer_disabled_content, send_content_from_response, get_success_reply_str
+
+MAX_MESSAGE_LENGTH = 4000
+
+
+async def answer_with_retry(msg: Message, text: str, **kwargs) -> Message:
+    """Отправляет сообщение, повторяя попытку при сетевой ошибке."""
+    try:
+        return await msg.answer(
+            text,
+            reply_to_message_id=msg.message_id,
+            **kwargs
+        )
+    except exceptions.TelegramRetryAfter as ex:
+        logger.warning(f"Telegram просит подождать {ex.retry_after} сек. {ex}")
+        await asyncio.sleep(ex.retry_after)
+        return await msg.answer(
+            text,
+            reply_to_message_id=msg.message_id,
+            **kwargs
+        )
+    except exceptions.TelegramNetworkError as ex:
+        logger.warning(f"Сетевая ошибка. Повтор через 60 секунд. {ex}")
+        await asyncio.sleep(60)
+        return await msg.answer(
+            text,
+            reply_to_message_id=msg.message_id,
+            **kwargs
+        )
+
+
+async def answer_long_with_retry(msg: Message, text: str, **kwargs):
+    """Отправляет длинный текст несколькими сообщениями."""
+    for fragment in split_text(text, MAX_MESSAGE_LENGTH) or [""]:
+        await answer_with_retry(msg, fragment, **kwargs)
+
+
+async def download_with_retry(
+    bot: Bot,
+    file_id: str,
+    destination: str | io.IOBase
+):
+    """Скачивает файл, повторяя попытку при сетевой ошибке.
+
+    Буфер перед каждой попыткой очищается, чтобы повтор не дописывал
+    данные в уже частично заполненный файл.
+    """
+    def reset_destination():
+        if hasattr(destination, "seek") and hasattr(destination, "truncate"):
+            destination.seek(0)
+            destination.truncate(0)
+
+    try:
+        reset_destination()
+        await bot.download(file_id, destination)
+    except exceptions.TelegramRetryAfter as ex:
+        logger.warning(f"Telegram просит подождать {ex.retry_after} сек. {ex}")
+        await asyncio.sleep(ex.retry_after)
+        reset_destination()
+        await bot.download(file_id, destination)
+    except exceptions.TelegramNetworkError as ex:
+        logger.warning(f"Сетевая ошибка. Повтор через 60 секунд. {ex}")
+        await asyncio.sleep(60)
+        reset_destination()
+        await bot.download(file_id, destination)
+
 
 async def start_script():
     bot = Bot(token=CONF.TG_BOT_TOKEN)
@@ -33,8 +100,168 @@ async def start_script():
     else:
         sauce_nao = None
 
+    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.text.contains('/to_tags'))
+    async def to_tags_handler(msg: Message):
+        logger.info("Запуск to_tags_handler")
+        if not msg.text:
+            return
+        reply = '\n'.join(get_tags_from_msg(msg))
+        if not reply:
+            await answer_with_retry(msg, "Теги не найдены")
+            return
+        logger.info(f"Отправленный ответ: {reply[:100]}")
+        for fragment in split_text(reply, MAX_MESSAGE_LENGTH - 100):
+            await answer_with_retry(
+                msg,
+                f"<pre>{html.escape(fragment)}</pre>",
+                parse_mode="HTML"
+            )
+
+    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.text.contains('/to_hashtags'))
+    async def to_hashtags_handler(msg: Message):
+        logger.info("Запуск to_hashtags_handler")
+        if not msg.text:
+            return
+        reply = multiline_to_hashtags(
+            msg.text.replace('/to_hashtags', '', 1),
+            remove_namespaces=True
+        )
+        if not reply:
+            await answer_with_retry(msg, "Теги не найдены")
+            return
+        logger.info(f"Отправленный ответ: {reply[:100]}")
+        await answer_long_with_retry(msg, reply)
+
+    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.text.contains('/sauce_by_hash'))
+    async def sauce_by_hash_handler(msg: Message):
+        logger.info("Запуск sauce_by_hash_handler")
+        if not msg.text:
+            return
+        if not sauce_nao:
+            await answer_with_retry(msg, "SauceNAO не настроен")
+            return
+        hashes = msg.text.replace('/sauce_by_hash', '', 1).split()
+        if not hashes:
+            await answer_with_retry(msg, "Не указан хэш")
+            return
+        for hash_str in hashes:
+            logger.info(f"Обработка {hash_str}")
+            try:
+                content_file = await asyncio.to_thread(hydrus.get_file, hash_str)
+                if not content_file:
+                    await answer_with_retry(msg, f"{hash_str}: файл не найден")
+                    continue
+                urls = await asyncio.to_thread(
+                    sauce_nao.get_sources,
+                    content_file.content
+                )
+                if not urls:
+                    await answer_with_retry(msg, f"{hash_str}: источники не найдены")
+                    continue
+                resp = await asyncio.to_thread(hydrus.import_content, urls=urls)
+            except hydrus_api.HydrusAPIException as ex:
+                logger.error(f"Ошибка Hydrus для {hash_str}: {ex}")
+                await answer_with_retry(msg, f"{hash_str}: ошибка Hydrus API")
+                continue
+
+            resp_str = hydrus.convert_import_resp_to_str(resp)
+            content_length = content_file.headers.get("Content-Length")
+            reply = get_success_reply_str(
+                "хэш",
+                resp_str,
+                content_size=int(content_length) if content_length else 0
+            )
+            logger.info(f"Отправленный ответ: {reply[:100]}")
+            await answer_long_with_retry(msg, reply)
+
+    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.text.contains('/tags_by_hash'))
+    async def tags_by_hash_handler(msg: Message):
+        logger.info("Запуск tags_by_hash_handler")
+        if not msg.text:
+            return
+        hashes = msg.text.replace('/tags_by_hash', '', 1).split()
+        if not hashes:
+            await answer_with_retry(msg, "Не указан хэш")
+            return
+        for hash_str in hashes:
+            logger.info(f"Обработка {hash_str}")
+            try:
+                tags = await asyncio.to_thread(hydrus.get_tags, hash_str)
+            except hydrus_api.HydrusAPIException as ex:
+                logger.error(f"Ошибка Hydrus для {hash_str}: {ex}")
+                await answer_with_retry(msg, f"{hash_str}: ошибка Hydrus API")
+                continue
+            if not tags:
+                await answer_with_retry(msg, f"{hash_str}: теги не найдены")
+                continue
+            reply = f"{hash_str}\n\n" + '\n'.join(tags)
+            logger.info(f"Отправленный ответ: {reply[:100]}")
+            await answer_long_with_retry(msg, reply)
+
+    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.text.contains('/hashtags_by_hash'))
+    async def hashtags_by_hash_handler(msg: Message):
+        logger.info("Запуск hashtags_by_hash_handler")
+        if not msg.text:
+            return
+        hashes = msg.text.replace('/hashtags_by_hash', '', 1).split()
+        if not hashes:
+            await answer_with_retry(msg, "Не указан хэш")
+            return
+        for hash_str in hashes:
+            logger.info(f"Обработка {hash_str}")
+            try:
+                tags = await asyncio.to_thread(hydrus.get_tags, hash_str)
+            except hydrus_api.HydrusAPIException as ex:
+                logger.error(f"Ошибка Hydrus для {hash_str}: {ex}")
+                await answer_with_retry(msg, f"{hash_str}: ошибка Hydrus API")
+                continue
+            hashtags = multiline_to_hashtags(
+                '\n'.join(tags),
+                remove_namespaces=True
+            )
+            if not hashtags:
+                await answer_with_retry(msg, f"{hash_str}: теги не найдены")
+                continue
+            reply = f"{hash_str}\n\n{hashtags}"
+            logger.info(f"Отправленный ответ: {reply[:100]}")
+            await answer_long_with_retry(msg, reply)
+
+    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.photo, F.caption.contains('/get_hash'))
+    async def get_hash_handler(msg: Message):
+        logger.info("Запуск get_hash_handler")
+        if not msg.photo:
+            return
+        photo = msg.photo[-1]
+        content_file = io.BytesIO()
+        await download_with_retry(bot, photo.file_id, content_file)
+
+        try:
+            resp = await asyncio.to_thread(hydrus.get_file_hash, content_file)
+        except hydrus_api.HydrusAPIException as ex:
+            logger.warning(f"Не удалось получить хэш из буфера: {ex}")
+            temp_path = os.path.join(
+                get_temp_folder(),
+                f"{photo.file_unique_id}.jpg"
+            )
+            try:
+                await download_with_retry(bot, photo.file_id, temp_path)
+                resp = await asyncio.to_thread(hydrus.get_file_hash, temp_path)
+            except hydrus_api.HydrusAPIException as retry_ex:
+                logger.error(f"Не удалось получить хэш из файла: {retry_ex}")
+                resp = None
+            finally:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+
+        reply = resp or "Файл не найден в системе или недостаточно прав"
+        logger.info(f"Отправленный ответ: {reply}")
+        await answer_with_retry(msg, reply)
+
     @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID))
     async def message_handler(msg: Message):
+        logger.info("Запуск message_handler")
         if msg_content := msg.photo:
             if not (msg.photo and "photo" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, "photo")
