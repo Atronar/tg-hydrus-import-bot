@@ -6,8 +6,10 @@ import asyncio
 import html
 import io
 import os
+import urllib.request
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import Message
 from aiogram import F, exceptions
 import hydrus_api
@@ -85,8 +87,52 @@ async def download_with_retry(
         await bot.download(file_id, destination)
 
 
+def get_telegram_proxy(configured_proxy: str | None = None) -> str | None:
+    """Возвращает прокси для Telegram Bot API.
+
+    Приоритет: настройка TG_PROXY, переменные окружения, системный прокси.
+    Пустая строка или None означают прямое подключение.
+    """
+    explicit_proxy = (configured_proxy or "").strip()
+    if explicit_proxy:
+        return explicit_proxy
+
+    proxy = next(
+        (
+            value.strip()
+            for name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy")
+            if (value := os.getenv(name, "")).strip()
+        ),
+        "",
+    )
+    if not proxy:
+        proxies = urllib.request.getproxies()
+        if os.name == "nt" and not proxies.get("https"):
+            # getproxies() не читает реестр, если задан NO_PROXY,
+            # поэтому системный прокси Windows запрашиваем отдельно.
+            registry_getter = getattr(urllib.request, "getproxies_registry", None)
+            if registry_getter:
+                try:
+                    proxies.update(registry_getter())
+                except OSError as ex:
+                    logger.warning(f"Не удалось прочитать системный прокси: {ex}")
+        proxy = (proxies.get("https") or proxies.get("http") or "").strip()
+
+    if proxy:
+        try:
+            if urllib.request.proxy_bypass("api.telegram.org"):
+                return None
+        except OSError:
+            pass
+    return proxy or None
+
+
 async def start_script():
-    bot = Bot(token=CONF.TG_BOT_TOKEN)
+    proxy = get_telegram_proxy(CONF.TG_PROXY)
+    session = AiohttpSession(proxy=proxy)
+    if proxy:
+        logger.info("Telegram Bot API: используется прокси")
+    bot = Bot(token=CONF.TG_BOT_TOKEN, session=session)
     dp = Dispatcher()
     hydrus = HydrusRequests(
         CONF.HYDRUS_TOKEN,

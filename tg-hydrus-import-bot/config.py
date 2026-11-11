@@ -19,6 +19,7 @@ class ConfigModel(BaseModel):
         str, 
         StringConstraints(strip_whitespace=True, pattern=r'^\d+:\S{35}$')
     ]
+    TG_PROXY: Annotated[str, StringConstraints(strip_whitespace=True)] = ""
     HYDRUS_TOKEN: Annotated[
         str,
         StringConstraints(

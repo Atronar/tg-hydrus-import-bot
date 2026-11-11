@@ -10,3 +10,4 @@ loguru
 hydrus-api
 Pillow
 aiohttp
+aiohttp-socks
