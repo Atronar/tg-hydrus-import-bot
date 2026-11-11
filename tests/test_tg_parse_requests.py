@@ -250,6 +250,27 @@ class MediaTests(unittest.TestCase):
                     f"{width}x{height} -> {new_width}x{new_height}",
                 )
 
+    def test_resize_image_clamps_small_dimension_to_one(self):
+        # При сильном уменьшении int(height * scale) может стать нулём.
+        # max(1, ...) должен оставить сторону равной одному пикселю.
+        for width, height in ((10000, 2), (2, 10000)):
+            with self.subTest(size=(width, height)):
+                source = BytesIO()
+                Image.frombytes(
+                    "RGB",
+                    (width, height),
+                    os.urandom(width * height * 3),
+                ).save(source, format="PNG")
+                content = source.getvalue()
+                resized = _resize_image(content, max_size=1000)
+                self.assertIsNotNone(resized)
+                with Image.open(BytesIO(resized)) as image:
+                    new_width, new_height = image.size
+
+                self.assertGreaterEqual(new_width, 1)
+                self.assertGreaterEqual(new_height, 1)
+                self.assertEqual(min(new_width, new_height), 1)
+
     def test_resize_image_does_not_upscale(self):
         source = BytesIO()
         Image.frombytes("RGB", (5000, 1), os.urandom(15000)).save(
