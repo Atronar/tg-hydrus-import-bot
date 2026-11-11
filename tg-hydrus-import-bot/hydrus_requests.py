@@ -499,6 +499,34 @@ class HydrusRequests:
             for resp_item in resp
         )
 
+    def get_main_file_hash(self, file_hash: str) -> str|None:
+        """Получение основного хэша файла
+
+        Parameters
+        ----------
+        file_hash : str
+            Хэш-ключ в sha256, однозначно определяющий файл
+
+        Returns
+        -------
+        str | None
+            Хэш файла, как он хранится в системе, либо None, если файл отсутствует
+        """
+        # Убираем sha256: и прочие из начала
+        if ':' in file_hash:
+            file_hash = file_hash.split(':',1)[-1]
+
+        file_relationships = cast(
+            hydrus_api_typing.FileRelationships,
+            self.client.get_file_relationships(hashes=[file_hash,])
+        )
+        relationship = file_relationships.get("file_relationships", {}).get(file_hash)
+        if not relationship:
+            return None
+        if relationship.get("is_king", True) and not relationship.get("king_is_on_file_domain", False):
+            return None
+        return relationship.get("king", file_hash)
+
     def get_file(self, file_hash: str):
         """Получение файла по хэшу
 
@@ -520,3 +548,107 @@ class HydrusRequests:
         if not file_hash:
             return None
         return self.client.get_file(hash_=file_hash)
+
+    def get_file_hash(self, file: str|os.PathLike|hydrus_api.BinaryFileLike) -> str|None:
+        """Получение хэша файла
+
+        Parameters
+        ----------
+        file : str | os.PathLike | hydrus_api.BinaryFileLike
+            Добавляемый файл
+            str и PathLike - путь к файлу в файловой системе
+            bytes - сам файл в виде двоичных данных
+            BytesIO - файловый объект с двоичными данными
+
+        Returns
+        -------
+        str | None
+            Хэш файла в системе (для похожего файла — хэш его king),
+            либо None, если ни точный, ни похожий файл не найден
+        """
+        # Проверка доступа
+        if not self.check_permission(HydrusPermission.FILES_IMPORT_DELETE):
+            logger.warning('Отсутствует доступ "import and delete files"')
+            return None
+        if not self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT):
+            logger.warning('Отсутствует доступ "edit file relationships"')
+            return None
+
+        # Генерируем хэши один раз: повторное чтение file-like объекта
+        # после первого read() возвращает пустые данные
+        hashes = self.generate_hashes(file)
+
+        # Сначала проверяем точное совпадение: для оригинала это быстрее,
+        # а для уже известного удалённого дубликата сразу находится king
+        file_hash = hashes.get('hash')
+        if file_hash and (main_hash := self.get_main_file_hash(file_hash)):
+            logger.debug(main_hash)
+            return main_hash
+
+        # Файл, прошедший через Telegram, обычно пережат и имеет другой sha256,
+        # поэтому ищем похожий файл по перцептивному хэшу
+        perceptual_hashes = hashes.get('perceptual_hashes')
+        if not perceptual_hashes:
+            return None
+        if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH):
+            logger.warning('Отсутствует доступ "search and fetch files"')
+            return None
+
+        found_hashes: list[str] = (
+            self
+            .client
+            .search_files(
+                [f"system:similar to {perceptual_hashes[0]} distance 5",],
+                return_hashes=True
+            )
+            .get('hashes', [])
+        )
+        for found_hash in found_hashes:
+            if main_hash := self.get_main_file_hash(found_hash):
+                logger.debug(main_hash)
+                return main_hash
+        return None
+
+    def generate_hashes(
+        self,
+        path_or_file: str | os.PathLike | hydrus_api.BinaryFileLike
+    ) -> hydrus_api_typing.FileHashes:
+        """Generate hashes for an arbitrary file.
+        Получение хэшей из Гидруса
+
+        В библиотеке питона не реализована возможность использования как аргумента самих данных,
+        что и исправлено здесь
+
+        Parameters
+        ----------
+        path_or_file : str | os.PathLike | hydrus_api.BinaryFileLike
+            Файл, для которого генерируются хэши
+            str и PathLike - путь к файлу в файловой системе
+            BinaryFileLike - сам файл в виде двоичных данных
+
+        Returns
+        -------
+        dict
+            Хэши файла
+        """
+        if isinstance(path_or_file, (os.PathLike, str)):
+            return cast(
+                hydrus_api_typing.FileHashes,
+                self.client.generate_hashes(path_or_file)
+            )
+
+        # file-like объект может быть не в начале: хэши считаются по всему файлу
+        if hasattr(path_or_file, "seek"):
+            path_or_file.seek(0)
+        data = path_or_file.read()
+        # Возвращаем указатель в начало, чтобы объект можно было использовать повторно
+        if hasattr(path_or_file, "seek"):
+            path_or_file.seek(0)
+
+        response = self.client._api_request(
+            "POST",
+            self.client._GENERATE_HASHES_PATH,
+            data=data,
+            headers={"Content-Type": "application/octet-stream"}
+        )
+        return cast(hydrus_api_typing.FileHashes, response.json())
