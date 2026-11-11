@@ -14,6 +14,8 @@ from start_script import (
     answer_with_retry,
     download_with_retry,
     get_telegram_proxy,
+    make_temp_file_path,
+    remove_temp_file,
     run_hydrus,
 )
 from tests.helpers import FakeMessage, fake_bot_download, telegram_exception
@@ -150,6 +152,25 @@ class TelegramProxyTests(unittest.TestCase):
             patch("start_script.urllib.request.proxy_bypass", return_value=False),
         ):
             self.assertIsNone(get_telegram_proxy())
+
+
+class TempFileTests(unittest.TestCase):
+    def test_paths_are_unique_and_safe(self):
+        first = make_temp_file_path("../a/b", "jpeg")
+        second = make_temp_file_path("../a/b", "jpeg")
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.endswith(".jpeg"))
+        self.assertNotIn("..", os.path.basename(first))
+        self.assertNotIn("/", os.path.basename(first))
+        self.assertNotIn("\\", os.path.basename(first))
+
+    def test_remove_temp_file(self):
+        path = make_temp_file_path("file", "txt")
+        with open(path, "w", encoding="utf-8") as file:
+            file.write("data")
+        remove_temp_file(path)
+        self.assertFalse(os.path.exists(path))
+        remove_temp_file(path)  # повторное удаление не должно падать
 
 
 class RunHydrusTests(unittest.IsolatedAsyncioTestCase):

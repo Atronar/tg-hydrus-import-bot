@@ -8,7 +8,9 @@ from functools import partial
 import html
 import io
 import os
+import re
 import urllib.request
+from uuid import uuid4
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -41,6 +43,28 @@ async def run_hydrus(func, *args, **kwargs):
         _HYDRUS_EXECUTOR,
         partial(func, *args, **kwargs)
     )
+
+
+def make_temp_file_path(file_unique_id: str, suffix: str = "") -> str:
+    """Возвращает уникальный путь во временной папке.
+
+    file_unique_id сам по себе не уникален между разными сообщениями,
+    поэтому добавляем случайный префикс.
+    """
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "", file_unique_id)[:64] or "file"
+    safe_suffix = re.sub(r"[^A-Za-z0-9]+", "", suffix)[:16]
+    filename = f"{uuid4().hex}_{safe_id}"
+    if safe_suffix:
+        filename = f"{filename}.{safe_suffix}"
+    return os.path.join(get_temp_folder(), filename)
+
+
+def remove_temp_file(path: str) -> None:
+    """Удаляет временный файл, не мешая обработке ошибок."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 async def answer_with_retry(msg: Message, text: str, **kwargs) -> Message:
@@ -304,10 +328,7 @@ async def start_script():
             resp = await run_hydrus(hydrus.get_file_hash, content_file)
         except hydrus_api.HydrusAPIException as ex:
             logger.warning(f"Не удалось получить хэш из буфера: {ex}")
-            temp_path = os.path.join(
-                get_temp_folder(),
-                f"{photo.file_unique_id}.jpg"
-            )
+            temp_path = make_temp_file_path(photo.file_unique_id, "jpg")
             try:
                 await download_with_retry(bot, photo.file_id, temp_path)
                 resp = await run_hydrus(hydrus.get_file_hash, temp_path)
@@ -315,10 +336,7 @@ async def start_script():
                 logger.error(f"Не удалось получить хэш из файла: {retry_ex}")
                 resp = None
             finally:
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
+                remove_temp_file(temp_path)
 
         reply = resp or "Файл не найден в системе или недостаточно прав"
         logger.info(f"Отправленный ответ: {reply}")
@@ -371,34 +389,36 @@ async def start_script():
                 return
 
             file_format = getattr(msg_content, "mime_type", "mp4").split('/')[-1]
-            content_file = os.path.join(
-                get_temp_folder(),
-                f"{msg_content.file_unique_id}.{file_format}"
+            content_file = make_temp_file_path(
+                msg_content.file_unique_id,
+                file_format
             )
+            try:
+                # Из текста достаём теги и ссылки
+                tags = get_tags_from_msg(msg)
+                urls = get_urls_from_msg(msg)
 
-            # Из текста достаём теги и ссылки
-            tags = get_tags_from_msg(msg)
-            urls = get_urls_from_msg(msg)
+                await bot.download(
+                    msg_content.file_id,
+                    content_file
+                )
 
-            await bot.download(
-                msg_content.file_id,
-                content_file
-            )
+                resp = await run_hydrus(
+                    hydrus.import_content,
+                    content_file,
+                    tags=tags,
+                    urls=urls
+                )
+                logger.debug(f"{resp}")
+                resp_str = hydrus.convert_import_resp_to_str(resp)
 
-            resp = await run_hydrus(
-                hydrus.import_content,
-                content_file,
-                tags=tags,
-                urls=urls
-            )
-            logger.debug(f"{resp}")
-            resp_str = hydrus.convert_import_resp_to_str(resp)
-
-            reply = get_success_reply_str(
-                "видео",
-                resp_str,
-                content_size=os.path.getsize(content_file)
-            )
+                reply = get_success_reply_str(
+                    "видео",
+                    resp_str,
+                    content_size=os.path.getsize(content_file)
+                )
+            finally:
+                remove_temp_file(content_file)
         # elif msg_content := msg.animation:
         #    if not (msg.animation and "animation" in CONF.CONTENT_TYPES):
         #        await answer_disabled_content(msg, type(msg_content).__name__)
@@ -419,38 +439,40 @@ async def start_script():
                 file_format = "mp3" if mime_type=="audio/mpeg" else mime_type.split('/')[-1]
             else:
                 file_format = "mp3"
-            content_file = os.path.join(
-                get_temp_folder(),
-                os.path.extsep.join([msg_content.file_unique_id, file_format])
+            content_file = make_temp_file_path(
+                msg_content.file_unique_id,
+                file_format
             )
+            try:
+                # Из текста достаём теги и ссылки
+                tags = get_tags_from_msg(msg)
+                if msg_content_title := getattr(msg_content, "title", None):
+                    tags.append(f"title:{msg_content_title}")
+                if msg_content_performer := getattr(msg_content, "performer", None):
+                    tags.append(f"artist:{msg_content_performer}")
+                urls = get_urls_from_msg(msg)
 
-            # Из текста достаём теги и ссылки
-            tags = get_tags_from_msg(msg)
-            if msg_content_title := getattr(msg_content, "title", None):
-                tags.append(f"title:{msg_content_title}")
-            if msg_content_performer := getattr(msg_content, "performer", None):
-                tags.append(f"artist:{msg_content_performer}")
-            urls = get_urls_from_msg(msg)
+                await bot.download(
+                    msg_content.file_id,
+                    content_file
+                )
 
-            await bot.download(
-                msg_content.file_id,
-                content_file
-            )
+                resp = await run_hydrus(
+                    hydrus.import_content,
+                    content_file,
+                    tags=tags,
+                    urls=urls
+                )
+                logger.debug(f"{resp}")
+                resp_str = hydrus.convert_import_resp_to_str(resp)
 
-            resp = await run_hydrus(
-                hydrus.import_content,
-                content_file,
-                tags=tags,
-                urls=urls
-            )
-            logger.debug(f"{resp}")
-            resp_str = hydrus.convert_import_resp_to_str(resp)
-
-            reply = get_success_reply_str(
-                "аудио",
-                resp_str,
-                content_size=os.path.getsize(content_file)
-            )
+                reply = get_success_reply_str(
+                    "аудио",
+                    resp_str,
+                    content_size=os.path.getsize(content_file)
+                )
+            finally:
+                remove_temp_file(content_file)
         # elif msg_content := msg.voice:
         #    if not (msg.voice and "voice" in CONF.CONTENT_TYPES):
         #        await answer_disabled_content(msg, type(msg_content).__name__)
@@ -465,34 +487,36 @@ async def start_script():
                 file_format = mime_type.split('/')[-1]
             else:
                 file_format = ""
-            content_file = os.path.join(
-                get_temp_folder(),
-                os.path.extsep.join([msg_content.file_unique_id, file_format])
+            content_file = make_temp_file_path(
+                msg_content.file_unique_id,
+                file_format
             )
+            try:
+                # Из текста достаём теги и ссылки
+                tags = get_tags_from_msg(msg)
+                urls = get_urls_from_msg(msg)
 
-            # Из текста достаём теги и ссылки
-            tags = get_tags_from_msg(msg)
-            urls = get_urls_from_msg(msg)
+                await bot.download(
+                    msg_content.file_id,
+                    content_file
+                )
 
-            await bot.download(
-                msg_content.file_id,
-                content_file
-            )
+                resp = await run_hydrus(
+                    hydrus.import_content,
+                    content_file,
+                    tags=tags,
+                    urls=urls
+                )
+                logger.debug(f"{resp}")
+                resp_str = hydrus.convert_import_resp_to_str(resp)
 
-            resp = await run_hydrus(
-                hydrus.import_content,
-                content_file,
-                tags=tags,
-                urls=urls
-            )
-            logger.debug(f"{resp}")
-            resp_str = hydrus.convert_import_resp_to_str(resp)
-
-            reply = get_success_reply_str(
-                "документ",
-                resp_str,
-                content_size=os.path.getsize(content_file)
-            )
+                reply = get_success_reply_str(
+                    "документ",
+                    resp_str,
+                    content_size=os.path.getsize(content_file)
+                )
+            finally:
+                remove_temp_file(content_file)
         elif msg.text:
             if not (msg.text and "text" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, "text")
