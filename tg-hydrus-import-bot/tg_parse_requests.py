@@ -2,7 +2,7 @@
 Модуль связанный с обработкой и запросами к телеграму
 """
 import asyncio
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import re
 from functools import partial
@@ -86,7 +86,9 @@ def answer_disabled_content(msg: Message, content_type_config_name: str) -> aiog
     logger.info(f"Отправленный ответ: {reply}")
     return msg.answer(reply, reply_to_message_id=msg.message_id, parse_mode="HTML")
 
-_FFMPEG_EXECUTOR = ProcessPoolExecutor(max_workers=2)  # Для CPU-bound задач
+# ffmpeg запускается отдельным процессом, поэтому потока достаточно:
+# это не блокирует event loop и не требует spawn-копии интерпретатора на Windows.
+_FFMPEG_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ffmpeg")
 
 async def _async_convert(func: Callable, *args) -> bytes | None:
     loop = asyncio.get_running_loop()

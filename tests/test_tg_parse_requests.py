@@ -1,6 +1,7 @@
 """Тесты обработки сообщений Telegram и отправки контента."""
 
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -10,6 +11,8 @@ from PIL import Image
 from tg_parse_requests import (
     MAX_FILE_SIZE,
     MAX_PHOTO_SIZE,
+    _FFMPEG_EXECUTOR,
+    _async_convert,
     _convert_video_to_mp4,
     _resize_image,
     _stream_content,
@@ -167,6 +170,16 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(await send_content_from_response(response, msg, "big.bin"))
         self.assertEqual(msg.media, [])
+
+
+class ExecutorTests(unittest.TestCase):
+    def test_ffmpeg_executor_is_thread_based(self):
+        self.assertIsInstance(_FFMPEG_EXECUTOR, ThreadPoolExecutor)
+
+
+class AsyncConvertTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runs_function(self):
+        self.assertEqual(await _async_convert(lambda value: value + 1, 1), 2)
 
 
 class MediaTests(unittest.TestCase):
