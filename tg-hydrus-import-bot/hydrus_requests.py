@@ -511,7 +511,11 @@ class HydrusRequests:
         -------
         str | None
             Хэш файла, как он хранится в системе, либо None, если файл отсутствует
+            или недоступны связи файлов
         """
+        if not self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT):
+            logger.warning('Отсутствует доступ "manage file relationships"')
+            return None
         # Убираем sha256: и прочие из начала
         if ':' in file_hash:
             file_hash = file_hash.split(':',1)[-1]
@@ -547,7 +551,69 @@ class HydrusRequests:
             return None
         if not file_hash:
             return None
+        if (
+            self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT)
+            and (main_file_hash := self.get_main_file_hash(file_hash))
+        ):
+            file_hash = main_file_hash
         return self.client.get_file(hash_=file_hash)
+
+    def get_tags(
+        self,
+        file_hash: str,
+        displayed_tags: bool = True,
+        tags_namespace: str|None = None
+    ) -> list[str]:
+        """Получение тегов сохранённого файла по его хэшу
+
+        Parameters
+        ----------
+        file_hash : str
+            Хэш-ключ однозначно определяющий файл, теги которого нужны
+            Если файл является дубликатом, берутся теги его king
+
+        displayed_tags : bool
+            True — вернуть отображаемые теги, False — хранимые
+
+        tags_namespace : str | None
+            Название тегового пространства, из которого берутся теги
+            Если None, то берётся из конфига "TAGS_NAMESPACE"
+
+        Returns
+        -------
+        list[str]
+            Список текущих тегов указанного пространства
+        """
+        if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH):
+            logger.warning('Отсутствует доступ "search and fetch files"')
+            return []
+        if not file_hash:
+            return []
+        if (
+            self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT)
+            and (main_file_hash := self.get_main_file_hash(file_hash))
+        ):
+            file_hash = main_file_hash
+        file_metadata = (
+            self
+            .client
+            .get_file_metadata(hashes=[file_hash,])
+            .get('metadata', [])
+        )
+        if not file_metadata:
+            return []
+        tags_namespaces: dict[str, hydrus_api_typing.TagsNamespace] = (
+            file_metadata[0].get('tags', {})
+        )
+        # Получаем пространство тегов
+        if tags_namespace_hash := self.get_tags_namespace_hash(tags_namespace):
+            tags = tags_namespaces.get(tags_namespace_hash, {})
+            if displayed_tags:
+                tags_list = tags.get("display_tags", {})
+            else:
+                tags_list = tags.get("storage_tags", {})
+            return tags_list.get("0", [])
+        return []
 
     def get_file_hash(self, file: str|os.PathLike|hydrus_api.BinaryFileLike) -> str|None:
         """Получение хэша файла

@@ -40,3 +40,24 @@ class Page(TypedDict):
 
 class TopPages(TypedDict):
     pages: Page
+
+class TagsNamespace(TypedDict):
+    name: str
+    type: int
+    type_pretty: str
+    storage_tags: dict[str, list[str]]
+    display_tags: dict[str, list[str]]
+
+class FileRelationship(TypedDict):
+    is_king: bool
+    king: str
+    king_is_on_file_domain: bool
+    king_is_local: bool
+
+class FileRelationships(TypedDict):
+    file_relationships: dict[str, FileRelationship]
+
+class FileHashes(TypedDict):
+    hash: str
+    perceptual_hashes: NotRequired[list[str]]
+    pixel_hash: NotRequired[str]
