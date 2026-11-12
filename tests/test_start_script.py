@@ -20,7 +20,9 @@ from start_script import (
     make_temp_file_path,
     remove_temp_file,
     run_hydrus,
+    _sauce_file_error,
 )
+from tg_parse_requests import MAX_PHOTO_SIZE
 from tests.helpers import FakeMessage, fake_bot_download, telegram_exception
 
 
@@ -197,6 +199,45 @@ class TempFileTests(unittest.TestCase):
         remove_temp_file(path)
         self.assertFalse(os.path.exists(path))
         remove_temp_file(path)  # повторное удаление не должно падать
+
+
+class SauceFileErrorTests(unittest.TestCase):
+    def test_accepts_small_image(self):
+        self.assertIsNone(
+            _sauce_file_error(
+                {"Content-Type": "image/jpeg", "Content-Length": "1024"}
+            )
+        )
+
+    def test_rejects_non_image(self):
+        self.assertEqual(
+            _sauce_file_error({"Content-Type": "video/mp4"}),
+            "файл не является изображением",
+        )
+
+    def test_rejects_missing_content_type(self):
+        self.assertEqual(
+            _sauce_file_error({}),
+            "файл не является изображением",
+        )
+
+    def test_rejects_too_large_image(self):
+        self.assertEqual(
+            _sauce_file_error(
+                {
+                    "Content-Type": "image/png",
+                    "Content-Length": str(MAX_PHOTO_SIZE + 1),
+                }
+            ),
+            "файл слишком большой для SauceNAO",
+        )
+
+    def test_ignores_malformed_content_length(self):
+        self.assertIsNone(
+            _sauce_file_error(
+                {"Content-Type": "image/png", "Content-Length": "unknown"}
+            )
+        )
 
 
 class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):

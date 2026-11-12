@@ -26,7 +26,7 @@ from hydrus_requests import HydrusRequests
 from saucenao_api import SauceNAO, SauseNAOException
 from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
     answer_disabled_content, send_content_from_response, get_success_reply_str, \
-    mime_subtype
+    mime_subtype, _content_length, MAX_PHOTO_SIZE
 
 MAX_MESSAGE_LENGTH = 4000
 
@@ -81,6 +81,16 @@ def remove_temp_file(path: str) -> None:
         os.unlink(path)
     except OSError:
         pass
+
+
+def _sauce_file_error(headers) -> str | None:
+    """Возвращает причину, по которой файл нельзя отправить в SauceNAO."""
+    content_type = headers.get("Content-Type", "")
+    if not content_type.lower().startswith("image/"):
+        return "файл не является изображением"
+    if _content_length(headers) > MAX_PHOTO_SIZE:
+        return "файл слишком большой для SauceNAO"
+    return None
 
 
 async def _answer_once(msg: Message, text: str, **kwargs) -> Message | None:
@@ -306,9 +316,20 @@ async def start_script():
                     await answer_with_retry(msg, f"{hash_str}: файл не найден")
                     continue
                 try:
+                    if file_error := _sauce_file_error(content_file.headers):
+                        await answer_with_retry(
+                            msg,
+                            f"{hash_str}: {file_error}"
+                        )
+                        continue
+                    content = content_file.content
+                    content_size = _content_length(content_file.headers)
+                finally:
+                    content_file.close()
+                try:
                     urls = await asyncio.to_thread(
                         sauce_nao.get_sources,
-                        content_file.content
+                        content
                     )
                 except SauseNAOException as ex:
                     logger.error(f"Ошибка SauceNAO для {hash_str}: {ex}")
@@ -327,11 +348,10 @@ async def start_script():
                 continue
 
             resp_str = hydrus.convert_import_resp_to_str(resp)
-            content_length = content_file.headers.get("Content-Length")
             reply = get_success_reply_str(
                 "хэш",
                 resp_str,
-                content_size=int(content_length) if content_length else 0
+                content_size=content_size
             )
             logger.info(f"Отправленный ответ: {reply[:100]}")
             await answer_long_with_retry(msg, reply)
