@@ -4,6 +4,7 @@
 import os
 import time
 from typing import Iterable, cast
+from cachetools import TTLCache
 import hydrus_api
 from loguru import logger
 from hydrus_api_enums import HydrusPermission, AddedFileStatus
@@ -41,6 +42,16 @@ class HydrusRequests:
         self.set_client(hydrus, api_url=api_url)
         self.set_default_tags_namespace(default_tags_namespace)
         self.set_default_destination_page_name(default_destination_page_name)
+        # Ключи сервисов и открытые страницы меняются редко, но не никогда:
+        # короткий TTL не даёт данным устареть насовсем.
+        self._tags_namespace_cache: TTLCache[str, str] = TTLCache(
+            maxsize=32,
+            ttl=3600
+        )
+        self._pages_cache: TTLCache[str, Iterable[hydrus_api_typing.Page]] = TTLCache(
+            maxsize=1,
+            ttl=60
+        )
         self.get_permission_info()
 
     def set_client(self, hydrus: hydrus_api.Client|str, *, api_url: str|None = None):
@@ -88,6 +99,16 @@ class HydrusRequests:
         """Проверка наличия права доступа"""
         return permission in self.permissions
 
+    def _get_root_pages(self) -> Iterable[hydrus_api_typing.Page]:
+        """Возвращает корневые страницы клиента, кэшируя ответ API."""
+        if "root" not in self._pages_cache:
+            # get_pages() возвращает словарь вида {'pages':{'pages': [список страниц в корне]}}
+            self._pages_cache["root"] = cast(
+                hydrus_api_typing.TopPages,
+                self.client.get_pages()
+            ).get('pages', {}).get('pages', ())
+        return self._pages_cache["root"]
+
     def get_page_hash_by_name(
             self,
             page_name: str,
@@ -120,11 +141,7 @@ class HydrusRequests:
         # и следует получить список всех открытых страниц
         is_root = False
         if pages is None:
-            # get_pages() возвращает словарь вида {'pages':{'pages': [список страниц в корне]}}
-            pages = cast(
-                hydrus_api_typing.TopPages,
-                self.client.get_pages()
-            ).get('pages',{}).get('pages',())
+            pages = self._get_root_pages()
             is_root = True
         if pages is None:
             raise ValueError("Не удалось получить страницы")
@@ -190,10 +207,15 @@ class HydrusRequests:
             tags_namespace = self.default_tags_namespace
         if not tags_namespace:
             return None
-        return cast(
-                hydrus_api_typing.GetServiceResponse,
-                self.client.get_service(service_name=tags_namespace)
+        if tags_namespace in self._tags_namespace_cache:
+            return self._tags_namespace_cache[tags_namespace]
+        service_key = cast(
+            hydrus_api_typing.GetServiceResponse,
+            self.client.get_service(service_name=tags_namespace)
         ).get('service').get('service_key')
+        if service_key:
+            self._tags_namespace_cache[tags_namespace] = service_key
+        return service_key
 
     def add_file(
             self,

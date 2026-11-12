@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
+from cachetools import TTLCache
 from aiogram import exceptions
 from aiogram.methods import SendMessage
 
@@ -95,6 +96,7 @@ class FakeHydrusClient:
         self.metadata: dict[str, dict[str, Any]] = {}
         self.service_key = "tag_service_key"
         self.service_keys: dict[str, str] = {}
+        self.pages: dict[str, Any] = {"pages": {"pages": []}}
         self.search_hashes: list[str] = []
         self.generated_hashes: dict[str, Any] = {"hash": "generated_hash"}
         self.cleaned_tags: list[str] = ["cleaned"]
@@ -112,6 +114,10 @@ class FakeHydrusClient:
                 "service_key": self.service_keys.get(service_name, self.service_key)
             }
         }
+
+    def get_pages(self):
+        self.calls.append(("get_pages", None))
+        return self.pages
 
     def get_file_metadata(self, hashes):
         self.calls.append(("get_file_metadata", hashes))
@@ -164,6 +170,8 @@ def make_hydrus(permissions, client: FakeHydrusClient | None = None):
     obj.permissions = set(permissions)
     obj.default_tags_namespace = "test tags"
     obj.destination_page_name = "test page"
+    obj._tags_namespace_cache = TTLCache(maxsize=32, ttl=3600)
+    obj._pages_cache = TTLCache(maxsize=1, ttl=60)
     return obj
 
 

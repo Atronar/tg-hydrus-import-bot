@@ -374,6 +374,40 @@ class ImportContentTests(unittest.TestCase):
         hydrus.add_urls.assert_called_once_with("file", ["https://example.com"])
 
 
+class CacheTests(unittest.TestCase):
+    def test_tags_namespace_is_cached(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus({HydrusPermission.TAGS_EDIT}, client)
+
+        first = hydrus.get_tags_namespace_hash()
+        second = hydrus.get_tags_namespace_hash()
+
+        self.assertEqual(first, client.service_key)
+        self.assertEqual(second, first)
+        self.assertEqual(
+            sum(1 for call in client.calls if call[0] == "get_service"),
+            1,
+        )
+
+    def test_root_pages_are_cached(self):
+        client = FakeHydrusClient()
+        client.pages = {
+            "pages": {
+                "pages": [
+                    {"name": "test page", "page_key": "page_key"},
+                ]
+            }
+        }
+        hydrus = make_hydrus({HydrusPermission.PAGES}, client)
+
+        self.assertEqual(hydrus.get_page_hash_by_name("test page"), "page_key")
+        self.assertEqual(hydrus.get_page_hash_by_name("test page"), "page_key")
+        self.assertEqual(
+            sum(1 for call in client.calls if call[0] == "get_pages"),
+            1,
+        )
+
+
 class ConvertResponseTests(unittest.TestCase):
     def test_converts_list_of_dicts(self):
         result = HydrusRequests.convert_import_resp_to_str(
