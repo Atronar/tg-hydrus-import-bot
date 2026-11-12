@@ -11,6 +11,14 @@ from hydrus_api_enums import HydrusPermission, AddedFileStatus
 import hydrus_api_typing
 
 
+# Импорт по ссылкам в Hydrus асинхронный: после add_url статус
+# приходится опрашивать. Общий дедлайн не даёт одному видео
+# удерживать обработчик сообщения до 10 минут.
+URL_IMPORT_TIMEOUT = 60.0
+URL_IMPORT_INITIAL_DELAY = 2.0
+URL_IMPORT_MAX_DELAY = 15.0
+
+
 class HydrusRequests:
     """Основной класс модуля
     Позволяет производить действия, связанные с Гидрусом
@@ -263,6 +271,132 @@ class HydrusRequests:
         self.client.add_files_to_page(page_key, hashes=[hydrus_added_file.get("hash"),])
         return hydrus_added_file
 
+    def add_files_from_urls(
+            self,
+            urls: Iterable[str],
+            *,
+            page_name: str|None = None,
+            tags: Iterable[str]|None = None,
+            tags_namespace: str|None = None
+        ) -> list[hydrus_api_typing.AddedFile]:
+        """Добавление в Гидрус нескольких ссылок с сохранением их порядка.
+
+        Все ссылки ставятся в очередь импорта сразу, после чего их статусы
+        опрашиваются пакетно. Это быстрее последовательного ожидания каждой
+        ссылки и не зависит от эвристики по слову "video" в URL.
+
+        Parameters
+        ----------
+        urls : Iterable[str]
+            URL контента в сети. Дубликаты удаляются с сохранением порядка.
+
+        page_name : str | None
+            Название страницы, на которую будет добавлен файл
+            Если None, то берётся из конфига "DESTINATION_PAGE_NAME"
+
+        tags : Iterable[str] | None
+            Добавляемые к файлам теги помимо тех, что захватит импорт
+
+        tags_namespace : str | None
+            Название тегового пространства, в которое запишутся теги
+            Если None, то берётся из конфига "TAGS_NAMESPACE"
+
+        Returns
+        -------
+        list[AddedFile]
+            Статусы импорта в порядке исходных ссылок.
+            Ссылки, по которым статус так и не появился, пропускаются.
+        """
+        # Без прав на работу со ссылками не имеет смысла
+        if not self.check_permission(HydrusPermission.URL_IMPORT_EDIT):
+            logger.warning('Отсутствует доступ "import and edit urls"')
+            return []
+
+        # dict.fromkeys сохраняет порядок первого появления и убирает дубликаты
+        unique_urls = list(dict.fromkeys(urls))
+        if not unique_urls:
+            return []
+        tag_list = list(tags) if tags else []
+        # Страница в клиенте, на которую добавится импорт
+        if page_name is None:
+            page_name = self.destination_page_name
+
+        additional_tags = None
+        tags_namespace_hash: str|None = None
+        cleaned_tags: list[str] = []
+        # clean_tags делается один раз на весь пакет ссылок
+        if tag_list:
+            # service_keys_to_additional_tags требует права на работу с тегами
+            if self.check_permission(HydrusPermission.TAGS_EDIT):
+                if tags_namespace_hash := self.get_tags_namespace_hash(tags_namespace):
+                    # note: clean_tags возвращает не list[str], а {'tags': list[str], ...}
+                    cleaned_tags = cast(
+                        hydrus_api_typing.CleanedTags,
+                        self.client.clean_tags(tag_list)
+                    ).get('tags', [])
+                    additional_tags = {tags_namespace_hash: cleaned_tags}
+            else:
+                logger.warning('Отсутствует доступ "edit file tags"')
+
+        statuses: list[hydrus_api_typing.AddedFile|None] = [None] * len(unique_urls)
+        pending: list[tuple[int, str]] = []
+
+        # Сначала ставим в очередь все ссылки, сохраняя их порядок
+        for index, url in enumerate(unique_urls):
+            url_file_statuses = cast(
+                hydrus_api_typing.URLFiles,
+                self.client.get_url_files(url)
+            ).get("url_file_statuses", [])
+            if url_file_statuses:
+                status = url_file_statuses[0]
+                # К уже существующему файлу теги из add_url не доимпортируются
+                if (
+                    cleaned_tags
+                    and status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE
+                ):
+                    self._add_tags_cleaned(
+                        status.get("hash"),
+                        cleaned_tags,
+                        tags_namespace_hash
+                    )
+                # Готовый статус уже есть — опрашивать ссылку не нужно
+                if status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE:
+                    statuses[index] = status
+                else:
+                    pending.append((index, url))
+            else:
+                pending.append((index, url))
+
+            # Собственно, импорт, как в клиенте
+            self.client.add_url(
+                url,
+                destination_page_name=page_name,
+                service_keys_to_additional_tags=additional_tags
+            )
+
+        # Пакетный опрос с экспоненциальной паузой
+        deadline = time.monotonic() + URL_IMPORT_TIMEOUT
+        delay = URL_IMPORT_INITIAL_DELAY
+        while pending and time.monotonic() < deadline:
+            still_pending: list[tuple[int, str]] = []
+            for index, url in pending:
+                url_file_statuses = cast(
+                    hydrus_api_typing.URLFiles,
+                    self.client.get_url_files(url)
+                ).get("url_file_statuses", [])
+                if url_file_statuses:
+                    statuses[index] = url_file_statuses[0]
+                else:
+                    still_pending.append((index, url))
+            pending = still_pending
+            if pending:
+                time.sleep(delay)
+                delay = min(delay * 1.5, URL_IMPORT_MAX_DELAY)
+
+        # None-ы (не дождались статуса) не попадают в результат,
+        # но порядок оставшихся ссылок сохраняется
+        return [status for status in statuses if status is not None]
+
     def add_file_from_url(
             self,
             url: str,
@@ -271,97 +405,32 @@ class HydrusRequests:
             tags: Iterable[str]|None = None,
             tags_namespace: str|None = None
         ) -> hydrus_api_typing.AddedFile|None:
-        """Добавление файла в Гидрус по ссылке
-        Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_add_url
+        """Добавление одного файла в Гидрус по ссылке.
 
-        Parameters
-        ----------
-        url : str
-            URL контента в сети
-            Контент - не обязательно файл, а лишь то, для чего у Гидруса есть импортёр
-
-        page_name : str | None
-            Название страницы, на которую будет добавлен файл
-            Если None, то берётся из конфига "DESTINATION_PAGE_NAME"
-
-        tags : Iterable[str] | None
-            Добавляемые к файлу теги помимо тех, что захватит импорт
-
-        tags_namespace : str | None
-            Название тегового пространства, в которое запишутся теги
-            Если None, то берётся из конфига "DESTINATION_PAGE_NAME"
-
-        Returns
-        -------
-        dict[str, str | int]
-            Возвращается ответ добавления файла, содержащий число status и строки hash и note
-            Подробнее:
-            https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_get_url_files
-            (первый элемент "url_file_statuses")
+        Оставлено для совместимости; пакетная обработка — в
+        :meth:`add_files_from_urls`.
         """
-        # Без прав на работу со ссылками не имеет смысла
-        if not self.check_permission(HydrusPermission.URL_IMPORT_EDIT):
-            logger.warning('Отсутствует доступ "import and edit urls"')
-            return None
-        # Страница в клиенте, на которую добавится импорт
-        if page_name is None:
-            page_name = self.destination_page_name
-        additional_tags = None
-        # Создание принимаемого словаря добавляемых тегов
-        # в пространстве для service_keys_to_additional_tags
-        if tags:
-            # service_keys_to_additional_tags требует права на работу с тегами
-            if self.check_permission(HydrusPermission.TAGS_EDIT):
-                if tags_namespace_hash := self.get_tags_namespace_hash(tags_namespace):
-                    # note: clean_tags возвращает не list[str], а {'tags': list[str], ...}
-                    additional_tags = {
-                        tags_namespace_hash: cast(
-                            hydrus_api_typing.CleanedTags,
-                            self.client.clean_tags(tags)
-                        ).get('tags', [])
-                    }
-            else:
-                logger.warning('Отсутствует доступ "edit file tags"')
-        # Проверяем существование контента — к ранее добавленным файлам дополнительно указанные
-        # в service_keys_to_additional_tags теги не добавятся, только вытащенные
-        # из импорта по ссылке поэтому добавляем их вручную
-        url_file_statuses = cast(
-            hydrus_api_typing.URLFiles,
-            self.client.get_url_files(url)
-        ).get("url_file_statuses", [])
-        if (
-            tags
-            and url_file_statuses
-            and url_file_statuses[0].get("status", None) == AddedFileStatus.ALREADY_IN_DATABASE
-        ):
-            # Файл уже есть - вручную проставленные теги сами не доимпортируются, к сожалению
-            self.add_tags(
-                url_file_statuses[0].get("hash", None),
-                tags,
-                tags_namespace=tags_namespace
-            )
-        # Собственно, импорт, как в клиенте
-        self.client.add_url(
-            url,
-            destination_page_name=page_name,
-            service_keys_to_additional_tags=additional_tags
+        added_files = self.add_files_from_urls(
+            [url],
+            page_name=page_name,
+            tags=tags,
+            tags_namespace=tags_namespace
         )
-        # Получаем и возвращаем статус добавления
-        timeout_lenght = 60
-        timeout_sleep = 2
-        if 'video' in url:
-            timeout_lenght *= 10
-            timeout_sleep = 30
-        timeout_end = time.time() + timeout_lenght
-        while time.time() < timeout_end:
-            url_file_statuses = cast(
-                hydrus_api_typing.URLFiles,
-                self.client.get_url_files(url)
-            ).get("url_file_statuses", [])
-            if url_file_statuses:
-                return url_file_statuses[0]
-            time.sleep(timeout_sleep)
-        return None
+        return added_files[0] if added_files else None
+
+    def _add_tags_cleaned(
+            self,
+            file_hash: str|None,
+            tags: Iterable[str],
+            tags_namespace_hash: str|None
+        ):
+        """Добавляет уже очищенные теги в известное пространство тегов."""
+        if not file_hash or not tags or not tags_namespace_hash:
+            return
+        self.client.add_tags(
+            hashes=[file_hash],
+            service_keys_to_tags={tags_namespace_hash: list(tags)}
+        )
 
     def add_tags(
             self,
@@ -393,21 +462,14 @@ class HydrusRequests:
         if not file_hash or not tags:
             return
 
-        additional_tags = None
-        # Получаем пространство тегов
+        # Получаем пространство тегов и очищаем теги
         if tags_namespace_hash := self.get_tags_namespace_hash(tags_namespace):
-            additional_tags = {
-                tags_namespace_hash: cast(
-                    hydrus_api_typing.CleanedTags,
-                    self.client.clean_tags(tags)
-                ).get('tags', [])
-            }
-        # И добавляем теги
-        # note: clean_tags возвращает не list[str], а {'tags': list[str], ...}
-        self.client.add_tags(
-            hashes=[file_hash,],
-            service_keys_to_tags=additional_tags
-        )
+            cleaned_tags = cast(
+                hydrus_api_typing.CleanedTags,
+                self.client.clean_tags(tags)
+            ).get('tags', [])
+            # note: clean_tags возвращает не list[str], а {'tags': list[str], ...}
+            self._add_tags_cleaned(file_hash, cleaned_tags, tags_namespace_hash)
 
     def add_urls(self, file_hash: str, urls: Iterable[str]):
         """Добавление к файлу ссылок
@@ -474,23 +536,33 @@ class HydrusRequests:
             (первый элемент "url_file_statuses")
             Каждый элемент списка - ответ добавления content_file и каждого элемента urls
         """
+        # Материализуем итерируемые аргументы: они используются несколько раз
+        url_list = list(urls) if urls else []
+        tag_list = list(tags) if tags else []
         added_file: list[hydrus_api_typing.AddedFile] = []
-        # Импорт файлов в Гидрус по ссылкам
-        if urls:
-            for url in urls:
-                if h_added_file := self.add_file_from_url(
-                    url,
+        # Импорт файлов в Гидрус по ссылкам.
+        # Результат сохраняет порядок ссылок, загруженных успешно.
+        if url_list:
+            added_file.extend(
+                self.add_files_from_urls(
+                    url_list,
                     page_name=page_name,
-                    tags=tags,
+                    tags=tag_list,
                     tags_namespace=tags_namespace
-                ):
-                    added_file.append(h_added_file)
+                )
+            )
         # Добавление собственно файла в Гидрус
         if content_file and (added_content := self.add_file(content_file, page_name=page_name)):
             added_file.insert(0, added_content)
             # Дописывание тегов и ссылок к файлу
-            if tags: self.add_tags(added_content.get("hash"), tags, tags_namespace=tags_namespace)
-            if urls: self.add_urls(added_content.get("hash"), urls)
+            if tag_list:
+                self.add_tags(
+                    added_content.get("hash"),
+                    tag_list,
+                    tags_namespace=tags_namespace
+                )
+            if url_list:
+                self.add_urls(added_content.get("hash"), url_list)
         # Возврат итогового результата
         return added_file
 

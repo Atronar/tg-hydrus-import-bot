@@ -100,6 +100,8 @@ class FakeHydrusClient:
         self.search_hashes: list[str] = []
         self.generated_hashes: dict[str, Any] = {"hash": "generated_hash"}
         self.cleaned_tags: list[str] = ["cleaned"]
+        # Очередь ответов get_url_files для имитации асинхронного импорта
+        self.url_file_statuses: dict[str, list[list[dict[str, Any]]]] = {}
         self.file_response = object()
         self.calls: list[tuple[str, Any]] = []
 
@@ -158,6 +160,9 @@ class FakeHydrusClient:
 
     def get_url_files(self, url):
         self.calls.append(("get_url_files", url))
+        responses = self.url_file_statuses.get(url)
+        if responses:
+            return {"url_file_statuses": responses.pop(0)}
         return {"url_file_statuses": [{"status": 1, "hash": "url_hash"}]}
 
 

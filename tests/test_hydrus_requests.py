@@ -351,7 +351,9 @@ class TagsAndUrlsTests(unittest.TestCase):
 class ImportContentTests(unittest.TestCase):
     def test_combines_file_and_urls(self):
         hydrus = make_hydrus(ALL_PERMISSIONS)
-        hydrus.add_file_from_url = Mock(return_value={"status": 1, "hash": "url"})
+        hydrus.add_files_from_urls = Mock(
+            return_value=[{"status": 1, "hash": "url"}]
+        )
         hydrus.add_file = Mock(return_value={"status": 1, "hash": "file"})
         hydrus.add_tags = Mock()
         hydrus.add_urls = Mock()
@@ -364,14 +366,73 @@ class ImportContentTests(unittest.TestCase):
         )
 
         self.assertEqual(result, [{"status": 1, "hash": "file"}, {"status": 1, "hash": "url"}])
-        hydrus.add_file_from_url.assert_called_once_with(
-            "https://example.com",
+        hydrus.add_files_from_urls.assert_called_once_with(
+            ["https://example.com"],
             page_name="page",
             tags=["tag"],
             tags_namespace=None,
         )
         hydrus.add_tags.assert_called_once_with("file", ["tag"], tags_namespace=None)
         hydrus.add_urls.assert_called_once_with("file", ["https://example.com"])
+
+
+class UrlBatchImportTests(unittest.TestCase):
+    def test_preserves_order_and_cleans_tags_once(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "u1": [[], [{"status": 1, "hash": "h1"}]],
+            # Уже есть в базе — статус доступен сразу
+            "u2": [[{"status": 2, "hash": "h2"}]],
+            # Появился только на втором опросе
+            "u3": [[], [], [{"status": 1, "hash": "h3"}]],
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.URL_IMPORT_EDIT, HydrusPermission.TAGS_EDIT},
+            client,
+        )
+
+        with patch("hydrus_requests.time.sleep"):
+            result = hydrus.add_files_from_urls(
+                ["u1", "u2", "u3"],
+                tags=["tag"],
+            )
+
+        self.assertEqual([item["hash"] for item in result], ["h1", "h2", "h3"])
+        add_url_order = [
+            call[1][0]
+            for call in client.calls
+            if call[0] == "add_url"
+        ]
+        self.assertEqual(add_url_order, ["u1", "u2", "u3"])
+        self.assertEqual(
+            sum(1 for call in client.calls if call[0] == "clean_tags"),
+            1,
+        )
+        self.assertIn(
+            ("add_tags", (["h2"], {"tag_service_key": ["cleaned"]})),
+            client.calls,
+        )
+
+    def test_deduplicates_urls_preserving_first_order(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus({HydrusPermission.URL_IMPORT_EDIT}, client)
+
+        result = hydrus.add_files_from_urls(["u1", "u2", "u1"])
+
+        self.assertEqual(len(result), 2)
+        add_url_order = [
+            call[1][0]
+            for call in client.calls
+            if call[0] == "add_url"
+        ]
+        self.assertEqual(add_url_order, ["u1", "u2"])
+
+    def test_without_permission_returns_empty(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus({HydrusPermission.FILES_SEARCH_FETCH}, client)
+
+        self.assertEqual(hydrus.add_files_from_urls(["u1"]), [])
+        self.assertEqual(client.calls, [])
 
 
 class CacheTests(unittest.TestCase):
