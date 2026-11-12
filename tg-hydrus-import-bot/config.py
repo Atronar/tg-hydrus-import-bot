@@ -4,12 +4,33 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Annotated, Literal
 import shutil
 import sys
 
-from pydantic import BaseModel, StringConstraints, Field, ValidationError
+from pydantic import BaseModel, StringConstraints, Field, ValidationError, field_validator
+
+_WINDOWS_ENV_PATTERN = re.compile(r"%([^%]+)%")
+
+def _expand_path(value: str) -> str:
+    """Раскрывает переменные окружения и ~ в путях.
+
+    os.path.expandvars на Windows понимает и %VAR%, и $VAR; на POSIX —
+    только $VAR, поэтому %VAR% раскрываем отдельно. Это позволяет
+    использовать в конфиге привычный для Windows путь %TEMP%\\... и
+    при этом не зависеть от текущей директории.
+    """
+    if not value:
+        return value
+    value = os.path.expandvars(value)
+    if os.name != "nt":
+        value = _WINDOWS_ENV_PATTERN.sub(
+            lambda match: os.environ.get(match.group(1), match.group(0)),
+            value,
+        )
+    return os.path.expanduser(value)
 
 class ConfigModel(BaseModel):
     LOG_LEVEL: int|Literal["TRACE","DEBUG","INFO","SUCCESS","WARNING","ERROR","CRITICAL"]
@@ -48,6 +69,11 @@ class ConfigModel(BaseModel):
         str,
         StringConstraints(strip_whitespace=True, pattern=r'^[\da-f]*$')
     ] = ""
+
+    @field_validator("LOG_PATH", "TEMP_PATH")
+    @classmethod
+    def _expand_path_fields(cls, value: str) -> str:
+        return _expand_path(value)
 
 __CONFPATH = ".conf.json"
 """Local path to json config"""

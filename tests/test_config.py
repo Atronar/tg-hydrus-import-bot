@@ -54,6 +54,38 @@ class ConfigModelTests(unittest.TestCase):
         self.assertEqual(config.TG_PROXY, "http://127.0.0.1:8118")
 
 
+class PathExpansionTests(unittest.TestCase):
+    def test_percent_environment_variable_is_expanded(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(os.environ, {"HYDRUS_TEST_DIR": temp_dir}):
+                config = ConfigModel(
+                    **{
+                        **TEST_CONFIG,
+                        "TEMP_PATH": "%HYDRUS_TEST_DIR%/temp",
+                        "LOG_PATH": "%HYDRUS_TEST_DIR%/logs/debug.log",
+                    }
+                )
+            self.assertEqual(Path(config.TEMP_PATH), Path(temp_dir) / "temp")
+            self.assertEqual(
+                Path(config.LOG_PATH),
+                Path(temp_dir) / "logs" / "debug.log",
+            )
+
+    def test_dollar_environment_variable_is_expanded(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(os.environ, {"HYDRUS_TEST_DIR": temp_dir}):
+                config = ConfigModel(
+                    **{**TEST_CONFIG, "TEMP_PATH": "$HYDRUS_TEST_DIR/temp"}
+                )
+            self.assertEqual(Path(config.TEMP_PATH), Path(temp_dir) / "temp")
+
+    def test_unknown_environment_variable_is_kept(self):
+        config = ConfigModel(
+            **{**TEST_CONFIG, "TEMP_PATH": "%HYDRUS_UNKNOWN_VAR%/temp"}
+        )
+        self.assertEqual(config.TEMP_PATH, "%HYDRUS_UNKNOWN_VAR%/temp")
+
+
 class LoadConfigTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()

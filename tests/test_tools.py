@@ -1,5 +1,6 @@
 """Тесты чистых функций из tools.py."""
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,7 @@ import tools
 from tools import (
     bytes_strformat,
     camelCase_to_snake_case,
+    get_temp_folder,
     make_safe_filename,
     multiline_to_hashtags,
     prepare_temp_folder,
@@ -137,6 +139,19 @@ class TempFolderTests(unittest.TestCase):
                 prepare_temp_folder()
                 self.assertTrue(temp_path.is_dir())
                 self.assertFalse((temp_path / "old.tmp").exists())
+
+    def test_get_temp_folder_expands_environment_variable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(os.environ, {"HYDRUS_TEST_TEMP": temp_dir}):
+                with patch.object(
+                    tools.CONF,
+                    "TEMP_PATH",
+                    "$HYDRUS_TEST_TEMP/temp",
+                ):
+                    self.assertEqual(
+                        get_temp_folder(),
+                        Path(temp_dir) / "temp",
+                    )
 
 
 if __name__ == "__main__":

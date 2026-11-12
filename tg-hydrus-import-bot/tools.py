@@ -14,7 +14,9 @@ def _validate_temp_path(temp_path: str|os.PathLike) -> Path:
     Защищает от случайного rmtree корня диска, домашнего каталога,
     текущего каталога и каталога, внутри которого находится проект.
     """
-    raw_path = Path(temp_path).expanduser()
+    # config.ConfigModel уже раскрывает переменные, но get_temp_folder может
+    # вызываться и с путём, заданным напрямую (например, в тестах).
+    raw_path = Path(os.path.expandvars(temp_path)).expanduser()
     if raw_path.is_symlink():
         raise ValueError(f"Временная папка не может быть символической ссылкой: {raw_path}")
 
