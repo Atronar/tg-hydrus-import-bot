@@ -290,6 +290,7 @@ async def send_content_from_response(
     только если нужна конвертация видео или сжатие изображения.
     """
     content_type = content_file.headers.get("Content-Type", "")
+    media_type = content_type.split(";", 1)[0].strip().lower()
     logger.debug(f"Content-Type: {content_type}")
     content_length = _content_length(content_file.headers)
     logger.debug(f"Content-Length: {content_length}")
@@ -302,7 +303,7 @@ async def send_content_from_response(
     temp_path = await _stream_content_to_temp(
         content_file,
         MAX_FILE_SIZE,
-        _suffix_for_content_type(content_type)
+        _suffix_for_content_type(media_type)
     )
     if temp_path is None:
         logger.warning(f"Файл превысил лимит: {MAX_FILE_SIZE} байт")
@@ -313,7 +314,7 @@ async def send_content_from_response(
         answer_kwargs = {}
         content: bytes | None = None
 
-        if content_type.startswith("video/"):
+        if media_type.startswith("video/"):
             if _file_is_mp4(temp_path):
                 # MP4 допустимого размера не перекодируем
                 input_file = FSInputFile(temp_path, filename)
@@ -328,14 +329,18 @@ async def send_content_from_response(
                 else:
                     input_file = FSInputFile(temp_path, filename)
                     answer_function = msg.answer_document
-        elif content_type in ("image/gif",):
+        elif media_type == "image/gif":
+            # Telegram сам перекодирует GIF в MP4 и заметно портит качество,
+            # поэтому всегда конвертируем заранее. Если не получилось —
+            # отправляем исходный файл документом, но не анимацией.
             content = await asyncio.to_thread(temp_path.read_bytes)
             if mp4_content := await _async_convert(_convert_video_to_mp4, content):
                 input_file = BufferedInputFile(mp4_content, filename)
+                answer_function = msg.answer_animation
             else:
                 input_file = FSInputFile(temp_path, filename)
-            answer_function = msg.answer_animation
-        elif content_type.startswith("image/"):
+                answer_function = msg.answer_document
+        elif media_type.startswith("image/"):
             if file_size <= MAX_PHOTO_SIZE:
                 input_file = FSInputFile(temp_path, filename)
                 answer_function = msg.answer_photo
@@ -350,7 +355,7 @@ async def send_content_from_response(
                     logger.warning(f"Файл превысил лимит для фото: {file_size} байт")
                     input_file = FSInputFile(temp_path, filename)
                     answer_function = msg.answer_document
-        elif content_type in _AUDIO_CONTENT_TYPES:
+        elif media_type in _AUDIO_CONTENT_TYPES:
             input_file = FSInputFile(temp_path, filename)
             answer_function = msg.answer_audio
         else:

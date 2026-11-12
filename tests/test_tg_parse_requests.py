@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from aiogram.types import MessageEntity
 from PIL import Image
@@ -255,6 +255,54 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         await send_content_from_response(response, msg, "audio.mp3")
         self.assertEqual(msg.media[0][0], "audio")
         self.assertEqual(msg.media_data[0][1], b"mp3")
+
+    async def test_send_audio_with_parameters(self):
+        msg = FakeMessage()
+        response = FakeResponse(
+            content=b"mp3",
+            headers={
+                "Content-Type": "audio/mpeg; charset=binary",
+                "Content-Length": "3",
+            },
+        )
+        await send_content_from_response(response, msg, "audio.mp3")
+        self.assertEqual(msg.media[0][0], "audio")
+
+    async def test_gif_is_converted_to_animation(self):
+        msg = FakeMessage()
+        response = FakeResponse(
+            content=b"gif",
+            headers={
+                "Content-Type": "image/gif; charset=binary",
+                "Content-Length": "3",
+            },
+        )
+        with patch(
+            "tg_parse_requests._async_convert",
+            new=AsyncMock(return_value=b"mp4"),
+        ):
+            await send_content_from_response(response, msg, "animation.gif")
+        kind, data, _ = msg.media_data[0]
+        self.assertEqual(kind, "animation")
+        self.assertEqual(data, b"mp4")
+
+    async def test_failed_gif_conversion_sends_document(self):
+        msg = FakeMessage()
+        response = FakeResponse(
+            content=b"gif",
+            headers={
+                "Content-Type": "image/gif",
+                "Content-Length": "3",
+            },
+        )
+        with patch(
+            "tg_parse_requests._async_convert",
+            new=AsyncMock(return_value=None),
+        ):
+            await send_content_from_response(response, msg, "animation.gif")
+        kind, data, _ = msg.media_data[0]
+        self.assertEqual(kind, "document")
+        self.assertEqual(data, b"gif")
 
     async def test_send_mp4_video_as_file(self):
         content = MediaTests._make_video("mp4")
