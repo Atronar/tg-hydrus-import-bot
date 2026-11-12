@@ -17,3 +17,4 @@ ENV/
 *.pyproj
 
 .conf.json
+*.pyproj.user
