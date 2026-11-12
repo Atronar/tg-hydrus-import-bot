@@ -5,9 +5,10 @@ import unittest
 from io import BytesIO
 from unittest.mock import Mock, patch
 
+import hydrus_api
 import requests
 
-from hydrus_api_enums import HydrusPermission
+from hydrus_api_enums import AddedFileStatus, HydrusPermission
 from hydrus_requests import (
     HYDRUS_TIMEOUT,
     HydrusRequests,
@@ -487,6 +488,50 @@ class UrlBatchImportTests(unittest.TestCase):
 
         self.assertEqual(hydrus.add_files_from_urls(["u1"]), [])
         self.assertEqual(client.calls, [])
+
+    def test_add_url_error_does_not_abort_batch(self):
+        client = FakeHydrusClient()
+        client.add_url_errors["u2"] = hydrus_api.HydrusAPIException("boom")
+        hydrus = make_hydrus({HydrusPermission.URL_IMPORT_EDIT}, client)
+
+        result = hydrus.add_files_from_urls(["u1", "u2", "u3"])
+
+        self.assertEqual(len(result), 3)
+        self.assertEqual(
+            [item["status"] for item in result],
+            [1, int(AddedFileStatus.FAILED_TO_IMPORT), 1],
+        )
+        self.assertIn("boom", result[1]["note"])
+
+    def test_adds_tags_when_duplicate_is_found_during_polling(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "u1": [[], [{"status": 2, "hash": "h1"}]],
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.URL_IMPORT_EDIT, HydrusPermission.TAGS_EDIT},
+            client,
+        )
+
+        with patch("hydrus_requests.time.sleep"):
+            result = hydrus.add_files_from_urls(["u1"], tags=["tag"])
+
+        self.assertEqual(result, [{"status": 2, "hash": "h1"}])
+        self.assertIn(
+            ("add_tags", (["h1"], {"tag_service_key": ["cleaned"]})),
+            client.calls,
+        )
+
+    def test_stops_polling_at_deadline(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {"u1": [[]]}
+        hydrus = make_hydrus({HydrusPermission.URL_IMPORT_EDIT}, client)
+
+        with patch("hydrus_requests.URL_IMPORT_TIMEOUT", 0), \
+                patch("hydrus_requests.time.sleep"):
+            result = hydrus.add_files_from_urls(["u1"])
+
+        self.assertEqual(result, [])
 
 
 class CacheTests(unittest.TestCase):

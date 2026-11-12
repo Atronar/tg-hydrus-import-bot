@@ -355,6 +355,15 @@ class HydrusRequests:
         self.client.add_files_to_page(page_key, hashes=[hydrus_added_file.get("hash"),])
         return hydrus_added_file
 
+    @staticmethod
+    def _failed_status(ex: Exception) -> hydrus_api_typing.AddedFile:
+        """Синтетический статус для ссылки, которую не удалось обработать."""
+        return {
+            "status": int(AddedFileStatus.FAILED_TO_IMPORT),
+            "hash": "",
+            "note": str(ex),
+        }
+
     def add_files_from_urls(
             self,
             urls: Iterable[str],
@@ -427,10 +436,18 @@ class HydrusRequests:
 
         # Сначала ставим в очередь все ссылки, сохраняя их порядок
         for index, url in enumerate(unique_urls):
-            url_file_statuses = cast(
-                hydrus_api_typing.URLFiles,
-                self.client.get_url_files(url)
-            ).get("url_file_statuses", [])
+            url_file_statuses = []
+            try:
+                url_file_statuses = cast(
+                    hydrus_api_typing.URLFiles,
+                    self.client.get_url_files(url)
+                ).get("url_file_statuses", [])
+            except hydrus_api.HydrusAPIException as ex:
+                # Не прерываем весь пакет из-за одной ссылки: add_url
+                # может сработать, а статус потом выяснится при опросе.
+                logger.warning(f"Не удалось проверить статус {url}: {ex}")
+
+            should_poll = True
             if url_file_statuses:
                 status = url_file_statuses[0]
                 # К уже существующему файлу теги из add_url не доимпортируются
@@ -446,17 +463,24 @@ class HydrusRequests:
                 # Готовый статус уже есть — опрашивать ссылку не нужно
                 if status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE:
                     statuses[index] = status
-                else:
-                    pending.append((index, url))
-            else:
-                pending.append((index, url))
+                    should_poll = False
 
             # Собственно, импорт, как в клиенте
-            self.client.add_url(
-                url,
-                destination_page_name=page_name,
-                service_keys_to_additional_tags=additional_tags
-            )
+            try:
+                self.client.add_url(
+                    url,
+                    destination_page_name=page_name,
+                    service_keys_to_additional_tags=additional_tags
+                )
+            except hydrus_api.HydrusAPIException as ex:
+                logger.error(f"Не удалось поставить в очередь {url}: {ex}")
+                # Если файл уже был в базе, его статус важнее ошибки add_url
+                if statuses[index] is None:
+                    statuses[index] = self._failed_status(ex)
+                    should_poll = False
+
+            if should_poll:
+                pending.append((index, url))
 
         # Пакетный опрос с экспоненциальной паузой
         deadline = time.monotonic() + URL_IMPORT_TIMEOUT
@@ -464,19 +488,49 @@ class HydrusRequests:
         while pending and time.monotonic() < deadline:
             still_pending: list[tuple[int, str]] = []
             for index, url in pending:
-                url_file_statuses = cast(
-                    hydrus_api_typing.URLFiles,
-                    self.client.get_url_files(url)
-                ).get("url_file_statuses", [])
+                # Дедлайн проверяем и внутри прохода: один медленный запрос
+                # не должен растягивать общее ожидание.
+                if time.monotonic() >= deadline:
+                    still_pending.append((index, url))
+                    continue
+                try:
+                    url_file_statuses = cast(
+                        hydrus_api_typing.URLFiles,
+                        self.client.get_url_files(url)
+                    ).get("url_file_statuses", [])
+                except hydrus_api.HydrusAPIException as ex:
+                    logger.warning(f"Не удалось опросить статус {url}: {ex}")
+                    still_pending.append((index, url))
+                    continue
                 if url_file_statuses:
-                    statuses[index] = url_file_statuses[0]
+                    status = url_file_statuses[0]
+                    statuses[index] = status
+                    # Ссылка могла стать известной уже после add_url
+                    if (
+                        cleaned_tags
+                        and status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE
+                    ):
+                        try:
+                            self._add_tags_cleaned(
+                                status.get("hash"),
+                                cleaned_tags,
+                                tags_namespace_hash
+                            )
+                        except hydrus_api.HydrusAPIException as ex:
+                            logger.warning(
+                                f"Не удалось добавить теги к {url}: {ex}"
+                            )
                 else:
                     still_pending.append((index, url))
             pending = still_pending
-            if pending:
+            if pending and time.monotonic() < deadline:
                 time.sleep(delay)
                 delay = min(delay * 1.5, URL_IMPORT_MAX_DELAY)
 
+        if pending:
+            logger.warning(
+                f"Не дождались статуса импорта для {len(pending)} ссылок"
+            )
         # None-ы (не дождались статуса) не попадают в результат,
         # но порядок оставшихся ссылок сохраняется
         return [status for status in statuses if status is not None]

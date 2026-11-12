@@ -114,6 +114,8 @@ class FakeHydrusClient:
         self.cleaned_tags: list[str] = ["cleaned"]
         # Очередь ответов get_url_files для имитации асинхронного импорта
         self.url_file_statuses: dict[str, list[list[dict[str, Any]]]] = {}
+        self.url_errors: dict[str, Exception] = {}
+        self.add_url_errors: dict[str, Exception] = {}
         self.file_response = object()
         self.calls: list[tuple[str, Any]] = []
 
@@ -169,9 +171,13 @@ class FakeHydrusClient:
 
     def add_url(self, url, **kwargs):
         self.calls.append(("add_url", (url, kwargs)))
+        if error := self.add_url_errors.get(url):
+            raise error
 
     def get_url_files(self, url):
         self.calls.append(("get_url_files", url))
+        if error := self.url_errors.get(url):
+            raise error
         responses = self.url_file_statuses.get(url)
         if responses:
             return {"url_file_statuses": responses.pop(0)}
