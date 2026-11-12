@@ -19,7 +19,8 @@ from ffmpeg import get_io_mp4
 
 MAX_FILE_SIZE = 50000000 # 50 Mb
 MAX_PHOTO_SIZE = 10000000 # 10 Mb
-JPEG_QUALITY = 85
+JPEG_QUALITIES = (90, 85, 80, 75)
+SCALE_STEP = 0.85
 
 HASHTAG_PATTERN = re.compile(r"#([^\s#@]+)") # regex для хэштегов
 
@@ -128,40 +129,55 @@ def _convert_video_to_mp4(content: bytes) -> bytes|None:
     return None  # Возврат None при ошибке
 
 def _resize_image(content: bytes, max_size: int) -> bytes | None:
-    """Сжимает изображение до указанного размера с сохранением пропорций."""
+    """Сжимает изображение до указанного размера с сохранением пропорций.
+
+    Сначала пробуем сохранить исходное разрешение, постепенно снижая
+    качество JPEG. Только если даже минимальное качество не помещается
+    в лимит, уменьшаем размеры изображения. Так видимая детализация
+    сохраняется лучше, чем при агрессивном даунскейле.
+    """
     if len(content) <= max_size:
         return content
     try:
         with Image.open(BytesIO(content)) as img:
             original_width, original_height = img.size
+            # JPEG не поддерживает альфа-канал
+            image = img.convert("RGB")
 
-            # Уменьшаем размер изображения до 2/3 площади на каждой итерации
-            pixel_size = original_width * original_height
-            scale_step = (2/3)**(0.5)
             if max_dimension := max(original_width, original_height):
                 # Изображение нельзя увеличивать: только уменьшаем
                 scale = min(1.0, 10000 / max_dimension)
             else:
                 scale = 1
-            # JPEG не поддерживает альфа-канал
-            image = img.convert("RGB")
-            while scale > 0.001 and pixel_size > 1:
+            while scale > 0.001:
                 new_size = (
                     max(1, int(original_width * scale)),
                     max(1, int(original_height * scale))
                 )
-                output = BytesIO()
-
-                image.resize(new_size, Image.Resampling.LANCZOS).save(
-                    output,
-                    format='JPEG',
-                    optimize=True,
-                    quality=JPEG_QUALITY
+                resized = (
+                    image
+                    if new_size == image.size
+                    else image.resize(new_size, Image.Resampling.LANCZOS)
                 )
-                if output.tell() <= max_size:
-                    return output.getvalue()
-                scale *= scale_step
-                pixel_size = new_size[0] * new_size[1]
+                # libjpeg падает на optimize для очень узких изображений
+                optimize = min(resized.size) >= 4
+                for quality in JPEG_QUALITIES:
+                    output = BytesIO()
+                    try:
+                        resized.save(
+                            output,
+                            format='JPEG',
+                            optimize=optimize,
+                            quality=quality
+                        )
+                    except OSError as ex:
+                        # libjpeg иногда не умеет optimize для очень узких
+                        # изображений — пробуем следующее качество/масштаб.
+                        logger.debug(f"JPEG quality={quality}: {ex}")
+                        continue
+                    if output.tell() <= max_size:
+                        return output.getvalue()
+                scale *= SCALE_STEP
 
         return None
     except Exception as e:

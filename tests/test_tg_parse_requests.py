@@ -321,6 +321,33 @@ class MediaTests(unittest.TestCase):
                 self.assertGreaterEqual(new_height, 1)
                 self.assertEqual(min(new_width, new_height), 1)
 
+    def test_resize_image_prefers_resolution_over_downscaling(self):
+        # Если в лимит можно уложиться снижением качества JPEG,
+        # разрешение должно остаться исходным.
+        width, height = 800, 600
+        source = BytesIO()
+        Image.frombytes(
+            "RGB", (width, height), os.urandom(width * height * 3)
+        ).save(source, format="PNG")
+        content = source.getvalue()
+
+        with Image.open(BytesIO(content)) as img:
+            image = img.convert("RGB")
+            sizes = {}
+            for quality in (85, 75):
+                output = BytesIO()
+                image.save(
+                    output, format="JPEG", quality=quality, optimize=True
+                )
+                sizes[quality] = output.tell()
+
+        self.assertGreater(sizes[85], sizes[75])
+        max_size = (sizes[85] + sizes[75]) // 2
+        resized = _resize_image(content, max_size)
+        self.assertIsNotNone(resized)
+        with Image.open(BytesIO(resized)) as result:
+            self.assertEqual(result.size, (width, height))
+
     def test_resize_image_does_not_upscale(self):
         source = BytesIO()
         Image.frombytes("RGB", (5000, 1), os.urandom(15000)).save(
