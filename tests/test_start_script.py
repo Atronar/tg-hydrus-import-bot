@@ -21,6 +21,7 @@ from start_script import (
     remove_temp_file,
     run_hydrus,
     _sauce_file_error,
+    parse_hash_args,
 )
 from tg_parse_requests import MAX_PHOTO_SIZE
 from tests.helpers import FakeMessage, fake_bot_download, telegram_exception
@@ -199,6 +200,15 @@ class TempFileTests(unittest.TestCase):
         remove_temp_file(path)
         self.assertFalse(os.path.exists(path))
         remove_temp_file(path)  # повторное удаление не должно падать
+
+
+class ParseHashArgsTests(unittest.TestCase):
+    def test_splits_hashes(self):
+        self.assertEqual(parse_hash_args("abc def"), ["abc", "def"])
+
+    def test_empty_args(self):
+        self.assertEqual(parse_hash_args(None), [])
+        self.assertEqual(parse_hash_args(""), [])
 
 
 class SauceFileErrorTests(unittest.TestCase):

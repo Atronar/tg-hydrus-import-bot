@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import Message
 from aiogram import F, exceptions
 import hydrus_api
@@ -91,6 +91,11 @@ def _sauce_file_error(headers) -> str | None:
     if _content_length(headers) > MAX_PHOTO_SIZE:
         return "файл слишком большой для SauceNAO"
     return None
+
+
+def parse_hash_args(args: str | None) -> list[str]:
+    """Разбирает список хэшей из аргументов команды."""
+    return (args or "").split()
 
 
 async def _answer_once(msg: Message, text: str, **kwargs) -> Message | None:
@@ -264,7 +269,7 @@ async def start_script():
         logger.info("Запуск help_handler")
         await answer_with_retry(msg, HELP_TEXT)
 
-    @dp.message(F.text.contains('/to_tags'))
+    @dp.message(Command("to_tags"))
     async def to_tags_handler(msg: Message):
         logger.info("Запуск to_tags_handler")
         if not msg.text:
@@ -281,13 +286,13 @@ async def start_script():
                 parse_mode="HTML"
             )
 
-    @dp.message(F.text.contains('/to_hashtags'))
-    async def to_hashtags_handler(msg: Message):
+    @dp.message(Command("to_hashtags"))
+    async def to_hashtags_handler(msg: Message, command: CommandObject):
         logger.info("Запуск to_hashtags_handler")
         if not msg.text:
             return
         reply = multiline_to_hashtags(
-            msg.text.replace('/to_hashtags', '', 1),
+            command.args or "",
             remove_namespaces=True
         )
         if not reply:
@@ -296,15 +301,15 @@ async def start_script():
         logger.info(f"Отправленный ответ: {reply[:100]}")
         await answer_long_with_retry(msg, reply)
 
-    @dp.message(F.text.contains('/sauce_by_hash'))
-    async def sauce_by_hash_handler(msg: Message):
+    @dp.message(Command("sauce_by_hash"))
+    async def sauce_by_hash_handler(msg: Message, command: CommandObject):
         logger.info("Запуск sauce_by_hash_handler")
         if not msg.text:
             return
         if not sauce_nao:
             await answer_with_retry(msg, "SauceNAO не настроен")
             return
-        hashes = msg.text.replace('/sauce_by_hash', '', 1).split()
+        hashes = parse_hash_args(command.args)
         if not hashes:
             await answer_with_retry(msg, "Не указан хэш")
             return
@@ -356,12 +361,12 @@ async def start_script():
             logger.info(f"Отправленный ответ: {reply[:100]}")
             await answer_long_with_retry(msg, reply)
 
-    @dp.message(F.text.contains('/tags_by_hash'))
-    async def tags_by_hash_handler(msg: Message):
+    @dp.message(Command("tags_by_hash"))
+    async def tags_by_hash_handler(msg: Message, command: CommandObject):
         logger.info("Запуск tags_by_hash_handler")
         if not msg.text:
             return
-        hashes = msg.text.replace('/tags_by_hash', '', 1).split()
+        hashes = parse_hash_args(command.args)
         if not hashes:
             await answer_with_retry(msg, "Не указан хэш")
             return
@@ -380,12 +385,12 @@ async def start_script():
             logger.info(f"Отправленный ответ: {reply[:100]}")
             await answer_long_with_retry(msg, reply)
 
-    @dp.message(F.text.contains('/hashtags_by_hash'))
-    async def hashtags_by_hash_handler(msg: Message):
+    @dp.message(Command("hashtags_by_hash"))
+    async def hashtags_by_hash_handler(msg: Message, command: CommandObject):
         logger.info("Запуск hashtags_by_hash_handler")
         if not msg.text:
             return
-        hashes = msg.text.replace('/hashtags_by_hash', '', 1).split()
+        hashes = parse_hash_args(command.args)
         if not hashes:
             await answer_with_retry(msg, "Не указан хэш")
             return
