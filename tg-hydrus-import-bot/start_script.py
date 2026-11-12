@@ -29,6 +29,8 @@ from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
     mime_subtype, _content_length, MAX_PHOTO_SIZE
 
 MAX_MESSAGE_LENGTH = 4000
+MAX_TELEGRAM_ATTEMPTS = 3
+TELEGRAM_NETWORK_RETRY_DELAY = 60
 
 HELP_TEXT = """Бот импортирует контент из Telegram в Hydrus Network.
 
@@ -112,17 +114,23 @@ async def _answer_once(msg: Message, text: str, **kwargs) -> Message | None:
 
 
 async def _answer_with_retry_once(msg: Message, text: str, **kwargs) -> Message | None:
-    """Отправляет одно сообщение с одной повторной попыткой."""
-    try:
-        return await _answer_once(msg, text, **kwargs)
-    except exceptions.TelegramRetryAfter as ex:
-        logger.warning(f"Telegram просит подождать {ex.retry_after} сек. {ex}")
-        await asyncio.sleep(ex.retry_after)
-        return await _answer_once(msg, text, **kwargs)
-    except exceptions.TelegramNetworkError as ex:
-        logger.warning(f"Сетевая ошибка. Повтор через 60 секунд. {ex}")
-        await asyncio.sleep(60)
-        return await _answer_once(msg, text, **kwargs)
+    """Отправляет одно сообщение, повторяя попытку при временных сбоях."""
+    for attempt in range(MAX_TELEGRAM_ATTEMPTS):
+        try:
+            return await _answer_once(msg, text, **kwargs)
+        except exceptions.TelegramRetryAfter as ex:
+            if attempt + 1 >= MAX_TELEGRAM_ATTEMPTS:
+                raise
+            logger.warning(f"Telegram просит подождать {ex.retry_after} сек. {ex}")
+            await asyncio.sleep(ex.retry_after)
+        except exceptions.TelegramNetworkError as ex:
+            if attempt + 1 >= MAX_TELEGRAM_ATTEMPTS:
+                raise
+            logger.warning(
+                f"Сетевая ошибка. Повтор через {TELEGRAM_NETWORK_RETRY_DELAY} секунд. {ex}"
+            )
+            await asyncio.sleep(TELEGRAM_NETWORK_RETRY_DELAY)
+    return None
 
 
 async def answer_with_retry(msg: Message, text: str, **kwargs) -> Message | None:
@@ -163,6 +171,13 @@ def handle_request_errors(func):
                 msg,
                 "Telegram отклонил ответ. Смотри логи."
             )
+        except Exception as ex:
+            # Не оставляем пользователя без ответа при неожиданной ошибке.
+            logger.exception(f"Непредвиденная ошибка: {ex}")
+            await answer_with_retry(
+                msg,
+                "Непредвиденная ошибка. Смотри логи."
+            )
     return wrapper
 
 
@@ -181,19 +196,23 @@ async def download_with_retry(
             destination.seek(0)
             destination.truncate(0)
 
-    try:
+    for attempt in range(MAX_TELEGRAM_ATTEMPTS):
         reset_destination()
-        await bot.download(file_id, destination)
-    except exceptions.TelegramRetryAfter as ex:
-        logger.warning(f"Telegram просит подождать {ex.retry_after} сек. {ex}")
-        await asyncio.sleep(ex.retry_after)
-        reset_destination()
-        await bot.download(file_id, destination)
-    except exceptions.TelegramNetworkError as ex:
-        logger.warning(f"Сетевая ошибка. Повтор через 60 секунд. {ex}")
-        await asyncio.sleep(60)
-        reset_destination()
-        await bot.download(file_id, destination)
+        try:
+            await bot.download(file_id, destination)
+            return
+        except exceptions.TelegramRetryAfter as ex:
+            if attempt + 1 >= MAX_TELEGRAM_ATTEMPTS:
+                raise
+            logger.warning(f"Telegram просит подождать {ex.retry_after} сек. {ex}")
+            await asyncio.sleep(ex.retry_after)
+        except exceptions.TelegramNetworkError as ex:
+            if attempt + 1 >= MAX_TELEGRAM_ATTEMPTS:
+                raise
+            logger.warning(
+                f"Сетевая ошибка. Повтор через {TELEGRAM_NETWORK_RETRY_DELAY} секунд. {ex}"
+            )
+            await asyncio.sleep(TELEGRAM_NETWORK_RETRY_DELAY)
 
 
 def get_telegram_proxy(configured_proxy: str | None = None) -> str | None:

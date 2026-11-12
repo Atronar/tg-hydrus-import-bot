@@ -88,6 +88,18 @@ class AnswerWithRetryTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await answer_with_retry(msg, "hello"))
         self.assertEqual(msg.answers, [])
 
+    async def test_repeated_retry_after_is_bounded(self):
+        msg = RetryMessage(
+            [
+                telegram_exception(exceptions.TelegramRetryAfter)
+                for _ in range(3)
+            ]
+        )
+        with patch("start_script.asyncio.sleep", new=AsyncMock()) as sleep:
+            with self.assertRaises(exceptions.TelegramRetryAfter):
+                await answer_with_retry(msg, "hello")
+        self.assertEqual(sleep.await_count, 2)
+
     async def test_long_message_via_answer_with_retry_is_split(self):
         msg = FakeMessage()
         await answer_with_retry(msg, "a" * (MAX_MESSAGE_LENGTH + 1))
@@ -121,6 +133,19 @@ class DownloadWithRetryTests(unittest.IsolatedAsyncioTestCase):
             await download_with_retry(bot, "file", destination)
         self.assertEqual(destination.getvalue(), b"content")
         self.assertEqual(bot.calls, 2)
+
+    async def test_repeated_network_error_is_bounded(self):
+        bot = fake_bot_download(
+            [
+                telegram_exception(exceptions.TelegramNetworkError)
+                for _ in range(3)
+            ]
+        )
+        destination = BytesIO()
+        with patch("start_script.asyncio.sleep", new=AsyncMock()):
+            with self.assertRaises(exceptions.TelegramNetworkError):
+                await download_with_retry(bot, "file", destination)
+        self.assertEqual(bot.calls, 3)
 
 
 class TelegramProxyTests(unittest.TestCase):
@@ -276,6 +301,23 @@ class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):
                 (
                     "Telegram отклонил ответ. Смотри логи.",
                     {"reply_to_message_id": 8},
+                )
+            ],
+        )
+
+    async def test_unexpected_error_is_reported_to_user(self):
+        @handle_request_errors
+        async def handler(msg):
+            raise RuntimeError("boom")
+
+        msg = FakeMessage(message_id=9)
+        await handler(msg)
+        self.assertEqual(
+            msg.answers,
+            [
+                (
+                    "Непредвиденная ошибка. Смотри логи.",
+                    {"reply_to_message_id": 9},
                 )
             ],
         )
