@@ -4,17 +4,20 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+import os
+from pathlib import Path
 import re
+import tempfile
 from functools import partial
 from requests import Response
 from typing import Callable, Iterable
 
 import aiogram.methods
-from aiogram.types import BufferedInputFile, Message, MessageEntity
+from aiogram.types import BufferedInputFile, FSInputFile, Message, MessageEntity
 from loguru import logger
 from PIL import Image
 
-from tools import camelCase_to_snake_case, bytes_strformat, url_with_schema
+from tools import camelCase_to_snake_case, bytes_strformat, get_temp_folder, url_with_schema
 from ffmpeg import get_io_mp4
 
 MAX_FILE_SIZE = 50000000 # 50 Mb
@@ -186,20 +189,79 @@ def _resize_image(content: bytes, max_size: int) -> bytes | None:
 
 STREAM_CHUNK_SIZE = 8388608  # 8 Mb
 
-async def _stream_content(response: Response, max_size: int) -> bytes | None:
-    """Потоковое чтение контента с проверкой размера"""
-    content = BytesIO()
-    for chunk in response.iter_content(STREAM_CHUNK_SIZE):
-        content.write(chunk)
-        if content.tell() > max_size:
-            return None
-    return content.getvalue()
+_CONTENT_SUFFIXES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "audio/mp3": ".mp3",
+    "audio/mpeg": ".mp3",
+    "audio/m4a": ".m4a",
+}
+
+def _suffix_for_content_type(content_type: str) -> str:
+    """Возвращает безопасное расширение для временного файла."""
+    if content_type in _CONTENT_SUFFIXES:
+        return _CONTENT_SUFFIXES[content_type]
+    subtype = content_type.split("/", 1)[-1].split(";", 1)[0]
+    subtype = re.sub(r"[^A-Za-z0-9]+", "", subtype)[:10]
+    return f".{subtype}" if subtype else ""
+
+def _close_response(response: Response) -> None:
+    close = getattr(response, "close", None)
+    if close:
+        close()
+
+def _file_is_mp4(path: Path) -> bool:
+    with path.open("rb") as file:
+        return _is_mp4(file.read(12))
+
+async def _stream_content_to_temp(
+    response: Response,
+    max_size: int,
+    suffix: str = ""
+) -> Path | None:
+    """Потоково пишет ответ Hydrus во временный файл, не держа его в памяти."""
+    def write_temp() -> Path | None:
+        fd, temp_name = tempfile.mkstemp(
+            prefix="hydrus_",
+            suffix=suffix,
+            dir=get_temp_folder()
+        )
+        too_large = False
+        try:
+            with os.fdopen(fd, "wb") as output:
+                for chunk in response.iter_content(STREAM_CHUNK_SIZE):
+                    if not chunk:
+                        continue
+                    if output.tell() + len(chunk) > max_size:
+                        too_large = True
+                        break
+                    output.write(chunk)
+            if too_large:
+                os.unlink(temp_name)
+                return None
+            return Path(temp_name)
+        except Exception:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+            raise
+        finally:
+            _close_response(response)
+
+    return await asyncio.to_thread(write_temp)
 
 async def send_content_from_response(
     content_file: Response, msg: Message, filename: str
 ) -> Message | None:
     """Отправка содержимого результата запроса (из Гидруса) в Телеграм,
-    основываясь на его Content-Type
+    основываясь на его Content-Type.
+
+    Файл потоково сохраняется во временный файл. В память он читается
+    только если нужна конвертация видео или сжатие изображения.
     """
     content_type = content_file.headers.get("Content-Type", "")
     logger.debug(f"Content-Type: {content_type}")
@@ -208,56 +270,78 @@ async def send_content_from_response(
 
     if content_length > MAX_FILE_SIZE:
         logger.warning(f"Файл превысил лимит: {content_length} байт")
+        _close_response(content_file)
         return None
 
-    # "Content-Length" отсутствует, смотрим реальный размер
-    if content_length == 0:
-        content = await _stream_content(content_file, MAX_FILE_SIZE)
-        if content:
-            content_length = len(content)
-        else:
-            logger.warning(f"Файл превысил лимит: {MAX_FILE_SIZE} байт")
-            return None
-    else:
-        content = content_file.content
-
-    answer_kwargs = {}
-
-    if content_type.startswith("video/",):
-        # mp4 правильного размера не конвертируются, а отдаются обратно
-        if (mp4_content := await _async_convert(_convert_video_to_mp4, content)):
-            answer_function = msg.answer_video
-            answer_kwargs["supports_streaming"] = True
-            content = mp4_content
-        else:
-            answer_function = msg.answer_document
-    elif content_type in ("image/gif",):
-        if (mp4_content := await _async_convert(_convert_video_to_mp4, content)):
-            content = mp4_content
-        answer_function = msg.answer_animation
-    elif content_type.startswith("image/"):
-        photo_content = None
-        if (
-            content_length <= MAX_PHOTO_SIZE
-            or (photo_content := await _async_convert(_resize_image, content, MAX_PHOTO_SIZE))
-        ):
-            answer_function = msg.answer_photo
-            if photo_content:
-                content = photo_content
-        else:
-            logger.warning(f"Файл превысил лимит для фото: {content_length} байт")
-            answer_function = msg.answer_document
-    elif content_type in ("audio/mp3", "audio/m4a"):
-        answer_function = msg.answer_audio
-    else:
-        answer_function = msg.answer_document
-    logger.debug(f"Используется метод: {answer_function.__name__}")
-    input_file = BufferedInputFile(content, filename)
-    return await answer_function(
-        input_file,
-        reply_to_message_id=msg.message_id,
-        **answer_kwargs
+    temp_path = await _stream_content_to_temp(
+        content_file,
+        MAX_FILE_SIZE,
+        _suffix_for_content_type(content_type)
     )
+    if temp_path is None:
+        logger.warning(f"Файл превысил лимит: {MAX_FILE_SIZE} байт")
+        return None
+
+    try:
+        file_size = temp_path.stat().st_size
+        answer_kwargs = {}
+        content: bytes | None = None
+
+        if content_type.startswith("video/"):
+            if _file_is_mp4(temp_path):
+                # MP4 допустимого размера не перекодируем
+                input_file = FSInputFile(temp_path, filename)
+                answer_function = msg.answer_video
+                answer_kwargs["supports_streaming"] = True
+            else:
+                content = await asyncio.to_thread(temp_path.read_bytes)
+                if mp4_content := await _async_convert(_convert_video_to_mp4, content):
+                    input_file = BufferedInputFile(mp4_content, filename)
+                    answer_function = msg.answer_video
+                    answer_kwargs["supports_streaming"] = True
+                else:
+                    input_file = FSInputFile(temp_path, filename)
+                    answer_function = msg.answer_document
+        elif content_type in ("image/gif",):
+            content = await asyncio.to_thread(temp_path.read_bytes)
+            if mp4_content := await _async_convert(_convert_video_to_mp4, content):
+                input_file = BufferedInputFile(mp4_content, filename)
+            else:
+                input_file = FSInputFile(temp_path, filename)
+            answer_function = msg.answer_animation
+        elif content_type.startswith("image/"):
+            if file_size <= MAX_PHOTO_SIZE:
+                input_file = FSInputFile(temp_path, filename)
+                answer_function = msg.answer_photo
+            else:
+                content = await asyncio.to_thread(temp_path.read_bytes)
+                if photo_content := await _async_convert(
+                    _resize_image, content, MAX_PHOTO_SIZE
+                ):
+                    input_file = BufferedInputFile(photo_content, filename)
+                    answer_function = msg.answer_photo
+                else:
+                    logger.warning(f"Файл превысил лимит для фото: {file_size} байт")
+                    input_file = FSInputFile(temp_path, filename)
+                    answer_function = msg.answer_document
+        elif content_type in ("audio/mp3", "audio/m4a"):
+            input_file = FSInputFile(temp_path, filename)
+            answer_function = msg.answer_audio
+        else:
+            input_file = FSInputFile(temp_path, filename)
+            answer_function = msg.answer_document
+
+        logger.debug(f"Используется метод: {answer_function.__name__}")
+        return await answer_function(
+            input_file,
+            reply_to_message_id=msg.message_id,
+            **answer_kwargs
+        )
+    finally:
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
 
 def get_success_reply_str(
         type_content_name: str,

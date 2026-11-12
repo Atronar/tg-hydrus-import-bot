@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
@@ -34,12 +35,16 @@ class FakeResponse:
         self.content = content
         self.headers = headers or {}
         self._chunks = chunks
+        self.closed = False
 
     def iter_content(self, chunk_size: int):
         if self._chunks is not None:
             yield from self._chunks
         elif self.content:
             yield self.content
+
+    def close(self):
+        self.closed = True
 
 
 class FakeMessage:
@@ -61,13 +66,20 @@ class FakeMessage:
         self.document = SimpleNamespace(file_unique_id=file_unique_id)
         self.answers: list[tuple[str, dict[str, Any]]] = []
         self.media: list[tuple[str, Any, dict[str, Any]]] = []
+        self.media_data: list[tuple[str, bytes, dict[str, Any]]] = []
 
     async def answer(self, text: str, **kwargs):
         self.answers.append((text, kwargs))
         return self
 
     async def _answer_media(self, kind: str, file: Any, **kwargs):
+        # FSInputFile удаляется сразу после отправки, поэтому сохраняем данные
+        if hasattr(file, "path"):
+            data = Path(file.path).read_bytes()
+        else:
+            data = file.data
         self.media.append((kind, file, kwargs))
+        self.media_data.append((kind, data, kwargs))
         return self
 
     async def answer_photo(self, file: Any, **kwargs):

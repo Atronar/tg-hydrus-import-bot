@@ -6,6 +6,7 @@ import subprocess
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -20,7 +21,7 @@ from tg_parse_requests import (
     _convert_video_to_mp4,
     _is_mp4,
     _resize_image,
-    _stream_content,
+    _stream_content_to_temp,
     answer_disabled_content,
     get_success_reply_str,
     get_tags_from_msg,
@@ -131,11 +132,18 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stream_content_reads_chunks(self):
         response = FakeResponse(chunks=[b"abc", b"def"])
-        self.assertEqual(await _stream_content(response, 10), b"abcdef")
+        path = await _stream_content_to_temp(response, 10, ".bin")
+        self.assertIsNotNone(path)
+        try:
+            self.assertEqual(path.read_bytes(), b"abcdef")
+        finally:
+            path.unlink(missing_ok=True)
+        self.assertTrue(response.closed)
 
     async def test_stream_content_stops_on_limit(self):
         response = FakeResponse(chunks=[b"abc", b"def"])
-        self.assertIsNone(await _stream_content(response, 5))
+        self.assertIsNone(await _stream_content_to_temp(response, 5, ".bin"))
+        self.assertTrue(response.closed)
 
     async def test_send_document_without_length(self):
         msg = FakeMessage(message_id=7)
@@ -148,8 +156,11 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(msg.media), 1)
         kind, file, kwargs = msg.media[0]
         self.assertEqual(kind, "document")
-        self.assertEqual(file.data, b"payload")
+        self.assertEqual(msg.media_data[0][1], b"payload")
         self.assertEqual(kwargs["reply_to_message_id"], 7)
+        self.assertTrue(response.closed)
+        # Временный файл удаляется после отправки
+        self.assertFalse(Path(file.path).exists())
 
     async def test_send_photo(self):
         msg = FakeMessage()
@@ -162,7 +173,7 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         )
         await send_content_from_response(response, msg, "image.jpg")
         self.assertEqual(msg.media[0][0], "photo")
-        self.assertEqual(msg.media[0][1].data, b"jpeg")
+        self.assertEqual(msg.media_data[0][1], b"jpeg")
 
     async def test_send_audio(self):
         msg = FakeMessage()
@@ -175,6 +186,23 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         )
         await send_content_from_response(response, msg, "audio.mp3")
         self.assertEqual(msg.media[0][0], "audio")
+        self.assertEqual(msg.media_data[0][1], b"mp3")
+
+    async def test_send_mp4_video_as_file(self):
+        content = MediaTests._make_video("mp4")
+        msg = FakeMessage()
+        response = FakeResponse(
+            content=content,
+            headers={
+                "Content-Type": "video/mp4",
+                "Content-Length": str(len(content)),
+            },
+        )
+        await send_content_from_response(response, msg, "video.mp4")
+        kind, data, kwargs = msg.media_data[0]
+        self.assertEqual(kind, "video")
+        self.assertTrue(kwargs["supports_streaming"])
+        self.assertTrue(_is_mp4(data))
 
     async def test_rejects_too_large_file(self):
         msg = FakeMessage()
@@ -187,6 +215,7 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(await send_content_from_response(response, msg, "big.bin"))
         self.assertEqual(msg.media, [])
+        self.assertTrue(response.closed)
 
 
 class ExecutorTests(unittest.TestCase):
