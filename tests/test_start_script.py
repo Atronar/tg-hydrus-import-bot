@@ -59,10 +59,33 @@ class AnswerWithRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(msg.answers[0][0]), MAX_MESSAGE_LENGTH)
         self.assertEqual(msg.answers[1][0], "a")
 
-    async def test_empty_long_message_sends_one_message(self):
+    async def test_empty_message_is_not_sent(self):
+        for text in ("", "   \n\t"):
+            with self.subTest(text=text):
+                msg = FakeMessage()
+                await answer_long_with_retry(msg, text)
+                self.assertEqual(msg.answers, [])
+
+    async def test_bad_request_is_logged_and_not_raised(self):
+        msg = RetryMessage([telegram_exception(exceptions.TelegramBadRequest)])
+        self.assertIsNone(await answer_with_retry(msg, "hello"))
+        self.assertEqual(msg.answers, [])
+
+    async def test_bad_request_after_network_retry_is_not_raised(self):
+        msg = RetryMessage(
+            [
+                telegram_exception(exceptions.TelegramNetworkError),
+                telegram_exception(exceptions.TelegramBadRequest),
+            ]
+        )
+        with patch("start_script.asyncio.sleep", new=AsyncMock()):
+            self.assertIsNone(await answer_with_retry(msg, "hello"))
+        self.assertEqual(msg.answers, [])
+
+    async def test_long_message_via_answer_with_retry_is_split(self):
         msg = FakeMessage()
-        await answer_long_with_retry(msg, "")
-        self.assertEqual(msg.answers, [("", {"reply_to_message_id": 1})])
+        await answer_with_retry(msg, "a" * (MAX_MESSAGE_LENGTH + 1))
+        self.assertEqual(len(msg.answers), 2)
 
 
 class DownloadWithRetryTests(unittest.IsolatedAsyncioTestCase):

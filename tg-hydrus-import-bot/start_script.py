@@ -67,36 +67,51 @@ def remove_temp_file(path: str) -> None:
         pass
 
 
-async def answer_with_retry(msg: Message, text: str, **kwargs) -> Message:
-    """Отправляет сообщение, повторяя попытку при сетевой ошибке."""
+async def _answer_once(msg: Message, text: str, **kwargs) -> Message | None:
+    """Отправляет одно сообщение, не роняя обработчик на отказе Telegram."""
     try:
         return await msg.answer(
             text,
             reply_to_message_id=msg.message_id,
             **kwargs
         )
+    except exceptions.TelegramBadRequest as ex:
+        logger.error(f"Telegram отклонил сообщение: {ex}")
+        return None
+
+
+async def _answer_with_retry_once(msg: Message, text: str, **kwargs) -> Message | None:
+    """Отправляет одно сообщение с одной повторной попыткой."""
+    try:
+        return await _answer_once(msg, text, **kwargs)
     except exceptions.TelegramRetryAfter as ex:
         logger.warning(f"Telegram просит подождать {ex.retry_after} сек. {ex}")
         await asyncio.sleep(ex.retry_after)
-        return await msg.answer(
-            text,
-            reply_to_message_id=msg.message_id,
-            **kwargs
-        )
+        return await _answer_once(msg, text, **kwargs)
     except exceptions.TelegramNetworkError as ex:
         logger.warning(f"Сетевая ошибка. Повтор через 60 секунд. {ex}")
         await asyncio.sleep(60)
-        return await msg.answer(
-            text,
-            reply_to_message_id=msg.message_id,
-            **kwargs
-        )
+        return await _answer_once(msg, text, **kwargs)
+
+
+async def answer_with_retry(msg: Message, text: str, **kwargs) -> Message | None:
+    """Отправляет текст, разбивая слишком длинные сообщения.
+
+    Пустые сообщения не отправляются: Telegram отвечает на них BadRequest.
+    """
+    if not text or not text.strip():
+        logger.warning("Пустое сообщение не отправлено")
+        return None
+
+    result = None
+    for fragment in split_text(text, MAX_MESSAGE_LENGTH):
+        result = await _answer_with_retry_once(msg, fragment, **kwargs)
+    return result
 
 
 async def answer_long_with_retry(msg: Message, text: str, **kwargs):
     """Отправляет длинный текст несколькими сообщениями."""
-    for fragment in split_text(text, MAX_MESSAGE_LENGTH) or [""]:
-        await answer_with_retry(msg, fragment, **kwargs)
+    return await answer_with_retry(msg, text, **kwargs)
 
 
 async def download_with_retry(
