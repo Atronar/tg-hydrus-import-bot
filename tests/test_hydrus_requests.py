@@ -1,5 +1,6 @@
 """Тесты HydrusRequests на поддельном клиенте Hydrus API."""
 
+import os
 import unittest
 from io import BytesIO
 from unittest.mock import Mock, patch
@@ -296,6 +297,22 @@ class GenerateHashesTests(unittest.TestCase):
 
         self.assertEqual(result, {"hash": "path_hash"})
         self.assertIn(("generate_hashes", "file.bin"), client.calls)
+
+    def test_falls_back_to_public_api_without_private_endpoint(self):
+        client = FakeHydrusClient()
+        client._api_request = None
+        client._GENERATE_HASHES_PATH = None
+        client.generated_hashes = {"hash": "fallback_hash"}
+        hydrus = make_hydrus(ALL_PERMISSIONS, client)
+
+        result = hydrus.generate_hashes(BytesIO(b"data"))
+
+        self.assertEqual(result, {"hash": "fallback_hash"})
+        generate_calls = [
+            call for call in client.calls if call[0] == "generate_hashes"
+        ]
+        self.assertEqual(len(generate_calls), 1)
+        self.assertFalse(os.path.exists(generate_calls[0][1]))
 
 
 class TagsAndUrlsTests(unittest.TestCase):

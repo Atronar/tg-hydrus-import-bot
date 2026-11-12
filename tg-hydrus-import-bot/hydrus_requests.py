@@ -3,6 +3,7 @@
 """
 import ipaddress
 import os
+import tempfile
 import time
 from typing import Iterable, cast
 from urllib.parse import urlparse
@@ -832,10 +833,30 @@ class HydrusRequests:
         if hasattr(path_or_file, "seek"):
             path_or_file.seek(0)
 
-        response = self.client._api_request(
-            "POST",
-            self.client._GENERATE_HASHES_PATH,
-            data=data,
-            headers={"Content-Type": "application/octet-stream"}
-        )
-        return cast(hydrus_api_typing.FileHashes, response.json())
+        # Публичный API hydrus-api умеет генерировать хэши только по пути.
+        # Если внутренний endpoint доступен — отправляем байты напрямую,
+        # иначе откатываемся на публичный метод через временный файл.
+        private_request = getattr(self.client, "_api_request", None)
+        private_path = getattr(self.client, "_GENERATE_HASHES_PATH", None)
+        if callable(private_request) and private_path:
+            response = private_request(
+                "POST",
+                private_path,
+                data=data,
+                headers={"Content-Type": "application/octet-stream"}
+            )
+            return cast(hydrus_api_typing.FileHashes, response.json())
+
+        fd, temp_path = tempfile.mkstemp(prefix="hydrus_hashes_", suffix=".bin")
+        try:
+            with os.fdopen(fd, "wb") as temp_file:
+                temp_file.write(data)
+            return cast(
+                hydrus_api_typing.FileHashes,
+                self.client.generate_hashes(temp_path)
+            )
+        finally:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
