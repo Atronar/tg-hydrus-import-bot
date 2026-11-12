@@ -221,19 +221,19 @@ class GetFileHashTests(unittest.TestCase):
         with (
             patch.object(hydrus, "generate_hashes", return_value={"hash": "h"}) as gen,
             patch.object(hydrus, "get_main_file_hash", return_value="king") as main,
+            patch.object(hydrus, "_is_local_file", return_value=True),
         ):
             self.assertEqual(hydrus.get_file_hash(BytesIO(b"data")), "king")
         gen.assert_called_once()
         main.assert_called_once_with("h")
 
-    def test_similar_hash_returns_king(self):
+    def test_phantom_hash_is_not_returned(self):
         client = FakeHydrusClient()
-        client.search_hashes = ["found"]
         hydrus = make_hydrus(
             {
                 HydrusPermission.FILES_IMPORT_DELETE,
-                HydrusPermission.FILES_SEARCH_FETCH,
                 HydrusPermission.RELATIONSHIPS_EDIT,
+                HydrusPermission.FILES_SEARCH_FETCH,
             },
             client,
         )
@@ -243,24 +243,95 @@ class GetFileHashTests(unittest.TestCase):
                 "generate_hashes",
                 return_value={"hash": "h", "perceptual_hashes": ["perceptual"]},
             ),
-            patch.object(hydrus, "get_main_file_hash", side_effect=[None, "king"]),
+            patch.object(hydrus, "get_main_file_hash", return_value="phantom"),
+            patch.object(hydrus, "_is_local_file", return_value=False),
         ):
-            self.assertEqual(hydrus.get_file_hash(BytesIO(b"data")), "king")
+            self.assertIsNone(hydrus.get_file_hash(BytesIO(b"data")))
         self.assertIn(
             (
                 "search_files",
-                (["system:similar to perceptual distance 5"], True),
+                (
+                    ["system:similar to data perceptual distance 5"],
+                    True,
+                ),
             ),
             client.calls,
         )
 
-    def test_returns_none_when_nothing_found(self):
+    def test_similar_hash_returns_king(self):
         client = FakeHydrusClient()
-        client.search_hashes = []
+        client.search_hashes = ["found"]
         hydrus = make_hydrus(
             {
                 HydrusPermission.FILES_IMPORT_DELETE,
+                HydrusPermission.RELATIONSHIPS_EDIT,
                 HydrusPermission.FILES_SEARCH_FETCH,
+            },
+            client,
+        )
+        with (
+            patch.object(
+                hydrus,
+                "generate_hashes",
+                return_value={
+                    "hash": "h",
+                    "perceptual_hashes": ["perceptual1", "perceptual2"],
+                },
+            ),
+            patch.object(
+                hydrus,
+                "get_main_file_hash",
+                side_effect=[None, "king"],
+            ) as main,
+            patch.object(hydrus, "_is_local_file", return_value=True),
+        ):
+            self.assertEqual(hydrus.get_file_hash(BytesIO(b"data")), "king")
+        main.assert_any_call("found")
+        self.assertIn(
+            (
+                "search_files",
+                (
+                    [
+                        "system:similar to data "
+                        "perceptual1 perceptual2 distance 5"
+                    ],
+                    True,
+                ),
+            ),
+            client.calls,
+        )
+
+    def test_phantom_similar_hash_is_not_returned(self):
+        client = FakeHydrusClient()
+        client.search_hashes = ["phantom"]
+        hydrus = make_hydrus(
+            {
+                HydrusPermission.FILES_IMPORT_DELETE,
+                HydrusPermission.RELATIONSHIPS_EDIT,
+                HydrusPermission.FILES_SEARCH_FETCH,
+            },
+            client,
+        )
+        with (
+            patch.object(
+                hydrus,
+                "generate_hashes",
+                return_value={"hash": "h", "perceptual_hashes": ["perceptual"]},
+            ),
+            patch.object(
+                hydrus,
+                "get_main_file_hash",
+                side_effect=[None, "phantom"],
+            ),
+            patch.object(hydrus, "_is_local_file", return_value=False),
+        ):
+            self.assertIsNone(hydrus.get_file_hash(BytesIO(b"data")))
+
+    def test_requires_search_permission_for_similar(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus(
+            {
+                HydrusPermission.FILES_IMPORT_DELETE,
                 HydrusPermission.RELATIONSHIPS_EDIT,
             },
             client,
@@ -274,8 +345,11 @@ class GetFileHashTests(unittest.TestCase):
             patch.object(hydrus, "get_main_file_hash", return_value=None),
         ):
             self.assertIsNone(hydrus.get_file_hash(BytesIO(b"data")))
+        self.assertFalse(
+            any(call[0] == "search_files" for call in client.calls)
+        )
 
-    def test_returns_none_without_perceptual_hashes(self):
+    def test_returns_none_when_nothing_found(self):
         hydrus = make_hydrus(
             {
                 HydrusPermission.FILES_IMPORT_DELETE,
@@ -299,6 +373,29 @@ class GetFileHashTests(unittest.TestCase):
         with patch.object(hydrus, "generate_hashes") as gen:
             self.assertIsNone(hydrus.get_file_hash(BytesIO(b"data")))
         gen.assert_not_called()
+
+
+class LocalFileCheckTests(unittest.TestCase):
+    def test_missing_metadata_is_not_local(self):
+        hydrus = make_hydrus(set())
+        self.assertFalse(hydrus._is_local_file("unknown"))
+
+    def test_non_local_file_is_not_local(self):
+        client = FakeHydrusClient()
+        client.metadata["remote"] = {"is_local": False}
+        hydrus = make_hydrus(set(), client)
+        self.assertFalse(hydrus._is_local_file("remote"))
+
+    def test_local_file_is_local(self):
+        client = FakeHydrusClient()
+        client.metadata["local"] = {"is_local": True}
+        hydrus = make_hydrus(set(), client)
+        self.assertTrue(hydrus._is_local_file("local"))
+        self.assertIn(("get_file_metadata", ["local"]), client.calls)
+
+    def test_empty_hash_is_not_local(self):
+        hydrus = make_hydrus(set())
+        self.assertFalse(hydrus._is_local_file(""))
 
 
 class GenerateHashesTests(unittest.TestCase):

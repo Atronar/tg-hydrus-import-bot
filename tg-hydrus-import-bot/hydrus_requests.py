@@ -871,6 +871,25 @@ class HydrusRequests:
             return tags_list.get("0", [])
         return []
 
+    def _is_local_file(self, file_hash: str) -> bool:
+        """Проверяет, что файл действительно доступен в локальной базе Hydrus.
+
+        Записи-призраки (например, hash из чужой базы) тоже имеют file_id,
+        поэтому ориентироваться на него нельзя: признак наличия файла —
+        is_local в ответе /get_files/file_metadata.
+        """
+        if not file_hash:
+            return False
+        file_metadata = (
+            self
+            .client
+            .get_file_metadata(hashes=[file_hash,])
+            .get('metadata', [])
+        )
+        if not file_metadata:
+            return False
+        return bool(file_metadata[0].get('is_local'))
+
     def get_file_hash(self, file: str|os.PathLike|hydrus_api.BinaryFileLike) -> str|None:
         """Получение хэша файла
 
@@ -879,14 +898,17 @@ class HydrusRequests:
         file : str | os.PathLike | hydrus_api.BinaryFileLike
             Добавляемый файл
             str и PathLike - путь к файлу в файловой системе
-            bytes - сам файл в виде двоичных данных
-            BytesIO - файловый объект с двоичными данными
+            BinaryFileLike - сам файл в виде двоичных данных
 
         Returns
         -------
         str | None
-            Хэш файла в системе (для похожего файла — хэш его king),
-            либо None, если ни точный, ни похожий файл не найден
+            Хэш локально доступного файла (для дубликата — хэш его king),
+            либо None, если ни точного, ни похожего файла нет.
+
+        Сначала проверяется точное совпадение sha256, затем — похожие
+        изображения через system:similar to data с перцептивным хэшем.
+        Записи-призраки отсекаются проверкой is_local.
         """
         # Проверка доступа
         if not self.check_permission(HydrusPermission.FILES_IMPORT_DELETE):
@@ -900,15 +922,19 @@ class HydrusRequests:
         # после первого read() возвращает пустые данные
         hashes = self.generate_hashes(file)
 
-        # Сначала проверяем точное совпадение: для оригинала это быстрее,
-        # а для уже известного удалённого дубликата сразу находится king
+        # Для уже известного удалённого дубликата сразу находится king.
+        # Но relationship может существовать и для записи-призрака,
+        # поэтому возвращаем хэш только при наличии локального файла.
         file_hash = hashes.get('hash')
         if file_hash and (main_hash := self.get_main_file_hash(file_hash)):
-            logger.debug(main_hash)
-            return main_hash
+            if self._is_local_file(main_hash):
+                logger.debug(main_hash)
+                return main_hash
+            logger.debug(f"Файл {main_hash} отсутствует локально")
 
         # Файл, прошедший через Telegram, обычно пережат и имеет другой sha256,
-        # поэтому ищем похожий файл по перцептивному хэшу
+        # поэтому ищем похожий файл по перцептивному хэшу. Ключевое слово data
+        # обязательно: без него Hydrus трактует хэш как sha256 файла.
         perceptual_hashes = hashes.get('perceptual_hashes')
         if not perceptual_hashes:
             return None
@@ -920,15 +946,16 @@ class HydrusRequests:
             self
             .client
             .search_files(
-                [f"system:similar to {perceptual_hashes[0]} distance 5",],
+                [f"system:similar to data {' '.join(perceptual_hashes)} distance 5",],
                 return_hashes=True
             )
             .get('hashes', [])
         )
         for found_hash in found_hashes:
             if main_hash := self.get_main_file_hash(found_hash):
-                logger.debug(main_hash)
-                return main_hash
+                if self._is_local_file(main_hash):
+                    logger.debug(main_hash)
+                    return main_hash
         return None
 
     def generate_hashes(

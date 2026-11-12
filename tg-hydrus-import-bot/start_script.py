@@ -42,7 +42,7 @@ HELP_TEXT = """Бот импортирует контент из Telegram в Hyd
 /sauce_by_hash <хэш>... — найти источники через SauceNAO и импортировать их
 /tags_by_hash <хэш>... — показать теги файлов по хэшам
 /hashtags_by_hash <хэш>... — показать хештеги файлов по хэшам
-/get_hash — в подписи к фото: показать перцептивный хэш изображения
+/get_hash — в подписи к фото: показать хэш файла, если он уже есть в Hydrus
 
 Командам с хэшами нужны права Hydrus "search and fetch files" и "manage file relationships". Команды SauceNAO работают, только если задан SAUCENAO_TOKEN."""
 
