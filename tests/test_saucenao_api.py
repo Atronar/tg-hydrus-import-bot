@@ -2,7 +2,9 @@
 
 import unittest
 from io import BytesIO
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import requests
 
 from saucenao_api import (
     SauceNAO,
@@ -138,6 +140,134 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(params["api_key"], "secret")
         self.assertEqual(params["db"], 999)
         self.assertEqual(params["url"], "https://example.com")
+
+    def test_cache_key_includes_account_and_settings(self):
+        sauce = SauceNAO("secret")
+        first = sauce._cache_key_for_url("https://example.com")
+        sauce.set_similarity(50)
+        second = sauce._cache_key_for_url("https://example.com")
+        sauce.db = 1
+        third = sauce._cache_key_for_url("https://example.com")
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(second, third)
+
+
+def make_http_response(status_code: int, *, headers=None, json_data=None):
+    response = Mock()
+    response.status_code = status_code
+    response.headers = headers or {}
+    response.json.return_value = json_data or {
+        "header": {"status": 0},
+        "results": [],
+    }
+    if status_code >= 400:
+        response.raise_for_status.side_effect = requests.HTTPError(
+            response=response
+        )
+    return response
+
+
+class RequestRetryTests(unittest.TestCase):
+    def setUp(self):
+        self.sauce = SauceNAO("key")
+
+    def test_retry_429_uses_retry_after(self):
+        responses = [
+            make_http_response(429, headers={"Retry-After": "0"}),
+            make_http_response(200),
+        ]
+        with (
+            patch.object(
+                self.sauce.session, "request", side_effect=responses
+            ) as request,
+            patch("saucenao_api.time.sleep") as sleep,
+        ):
+            self.assertEqual(self.sauce._execute_search("GET"), [])
+
+        self.assertEqual(request.call_count, 2)
+        sleep.assert_called_once_with(0.0)
+
+    def test_retry_after_is_capped(self):
+        responses = [
+            make_http_response(429, headers={"Retry-After": "3600"}),
+            make_http_response(200),
+        ]
+        with (
+            patch.object(
+                self.sauce.session, "request", side_effect=responses
+            ),
+            patch("saucenao_api.time.sleep") as sleep,
+        ):
+            self.assertEqual(self.sauce._execute_search("GET"), [])
+
+        sleep.assert_called_once_with(self.sauce.MAX_RETRY_DELAY)
+
+    def test_retry_5xx_then_success(self):
+        responses = [
+            make_http_response(503),
+            make_http_response(200),
+        ]
+        with (
+            patch.object(
+                self.sauce.session, "request", side_effect=responses
+            ) as request,
+            patch("saucenao_api.time.sleep") as sleep,
+        ):
+            self.assertEqual(self.sauce._execute_search("GET"), [])
+
+        self.assertEqual(request.call_count, 2)
+        sleep.assert_called_once_with(2.0)
+
+    def test_does_not_retry_client_error(self):
+        response = make_http_response(400)
+        with (
+            patch.object(
+                self.sauce.session, "request", return_value=response
+            ) as request,
+            patch("saucenao_api.time.sleep") as sleep,
+        ):
+            self.assertIsNone(self.sauce._execute_search("GET"))
+
+        self.assertEqual(request.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_daily_limit_does_not_sleep(self):
+        response = make_http_response(
+            200,
+            json_data={
+                "header": {
+                    "status": -2,
+                    "message": "Daily Search Limit Exceeded",
+                },
+                "results": [],
+            },
+        )
+        with (
+            patch.object(
+                self.sauce.session, "request", return_value=response
+            ),
+            patch("saucenao_api.time.sleep") as sleep,
+        ):
+            self.assertIsNone(self.sauce._execute_search("GET"))
+
+        self.assertGreater(self.sauce.daily_limit_time, 0)
+        sleep.assert_not_called()
+
+    def test_cache_is_per_instance_and_not_shared(self):
+        first = SauceNAO("key-1")
+        with patch.object(
+            first, "_execute_search", return_value=[make_result()]
+        ) as execute:
+            first.search_file(b"data")
+            first.search_file(b"data")
+        self.assertEqual(execute.call_count, 1)
+
+        second = SauceNAO("key-2")
+        with patch.object(
+            second, "_execute_search", return_value=[]
+        ) as execute:
+            second.search_file(b"data")
+        self.assertEqual(execute.call_count, 1)
 
 
 if __name__ == "__main__":

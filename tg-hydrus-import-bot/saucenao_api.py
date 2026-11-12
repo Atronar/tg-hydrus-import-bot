@@ -1,6 +1,9 @@
 ﻿import hashlib
 from io import BytesIO, IOBase
+import threading
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, NotRequired, TypedDict
 import urllib.parse
 import cachetools
@@ -106,10 +109,12 @@ class BaseSauceNAO:
     """Базовый класс с общими методами для SauceNAO"""
     API_URL = "https://saucenao.com/search.php"
     OUTPUT_TYPE = 2
-    MAX_RETRIES = 30
-    RETRY_DELAY = 5
+    # Короткие повторы: 2, 4, 8, 16 c. Дольше держать обработчик бессмысленно.
+    MAX_RETRIES = 5
+    RETRY_DELAY = 2.0
+    MAX_RETRY_DELAY = 30.0
+    SHORT_LIMIT_DELAY = 30.0
     TIMEOUT = 60
-    _cache = cachetools.TTLCache(maxsize=100, ttl=604800)
 
     def __init__(
         self,
@@ -124,15 +129,33 @@ class BaseSauceNAO:
         self.db = 999
         self.minsim = 80
         self.daily_limit_time = 0
+        # Оставлен для совместимости: суточный лимит больше не блокирует поток.
         self.wait_daily_limit = wait_daily_limit
         self.proxies = proxies
         self._cache = cachetools.TTLCache(maxsize=cache_size, ttl=cache_ttl)
+        self._cache_lock = threading.Lock()
+        self.session = requests.Session()
+        self._session_lock = threading.Lock()
 
     def _get_cache_key(self, file: str|IOBase|bytes):
         if isinstance(file, str):
             return ('url', urllib.parse.quote(file))
         content = self._read_file_content(file)
         return ('content', hashlib.md5(content).hexdigest())
+
+    def _cache_scope(self) -> tuple[str, int, float]:
+        """Общая часть ключа кэша: результаты разных аккаунтов/настроек не смешиваются."""
+        return (
+            hashlib.sha256(self.api_key.encode()).hexdigest(),
+            self.db,
+            self.minsim,
+        )
+
+    def _cache_key_for_url(self, url: str):
+        return (*self._cache_scope(), 'url', urllib.parse.quote(url))
+
+    def _cache_key_for_content(self, content: bytes):
+        return (*self._cache_scope(), 'content', hashlib.md5(content).hexdigest())
 
     def set_similarity(self, value: float):
         """Установка уровня минимального сходства
@@ -230,62 +253,129 @@ class SauceNAO(BaseSauceNAO):
         return self.search_url(file)
 
     def _handle_rate_limit(self) -> float | None:
-        """Проверка и обработка суточного лимита"""
+        """Проверка суточного лимита.
+
+        Не спит сутками: обработчик Telegram не должен зависать на 24 часа.
+        """
         if (remaining_time := self.daily_limit_time + 24*3600 - time.time()) > 0:
-            logger.warning(f"Достигнут дневной лимит запросов к SauceNAO")
-            # Мы не можем проводить поиск, если достигнут лимит
-            if self.wait_daily_limit:
-                logger.info(f"Ожидание {remaining_time:.0f} секунд")
-                time.sleep(remaining_time)
-            else:
-                return remaining_time
+            logger.warning(
+                "Достигнут дневной лимит SauceNAO, "
+                f"осталось {remaining_time:.0f} c"
+            )
+            return remaining_time
         return None
 
-    def _make_request(self, method: str, **request_kwargs) -> ResponseJSON|None:
-        """Общая логика выполнения запроса с обработкой повторов"""
-        for attempt in range(self.MAX_RETRIES):
-            is_slept = False
+    @staticmethod
+    def _retry_after(response: requests.Response) -> float | None:
+        """Разбирает Retry-After (секунды или HTTP-дата)."""
+        value = response.headers.get("Retry-After")
+        if not value:
+            return None
+        try:
+            return max(0.0, float(value))
+        except ValueError:
             try:
-                resp = requests.request(
-                    method,
-                    self.API_URL,
-                    **request_kwargs,
-                    timeout = self.TIMEOUT,
-                    proxies = self.proxies
-                )
-                resp.raise_for_status()
-                return self._process_response(resp)
-                
-            except SauceNaoTooManyRequests as exc:
-                logger.info(exc.message)
-                if not exc.daily_limit:
-                    # Упёрлись в 30-секундный лимит, ждём
-                    time.sleep(30)
-                    is_slept = True
-                else:
-                    # Упёрлись в суточный лимит, записываем время
-                    self.daily_limit_time = time.time()
-                if self._handle_rate_limit():
-                    return None
-            except requests.HTTPError as exc:
-                logger.error(f"HTTP error {exc.response.status_code}: {exc}")
-                if exc.response.status_code == 413:
-                    return None
-            except requests.RequestException as exc:
-                logger.error(f"Request failed: {exc}")
-            
-            if not is_slept and attempt < self.MAX_RETRIES - 1:
-                sleep_time = self.RETRY_DELAY * (attempt + 1)
-                logger.info(f"Retrying in {sleep_time}s...")
-                time.sleep(sleep_time)
-        
-        return None
+                retry_at = parsedate_to_datetime(value)
+            except (TypeError, ValueError):
+                return None
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            return max(
+                0.0,
+                (retry_at - datetime.now(timezone.utc)).total_seconds()
+            )
 
-    def _execute_search(self, method: str, **request_args) -> list[Result]:
-        """Выполнение поискового запроса"""
-        if resp := self._make_request(method, **request_args):
-            return self.resp_handle(resp)
-        return []
+    def _backoff(self, attempt: int) -> float:
+        return min(self.RETRY_DELAY * (2 ** attempt), self.MAX_RETRY_DELAY)
+
+    def _execute_search(
+        self,
+        method: str,
+        **request_args
+    ) -> list[Result] | None:
+        """Выполняет запрос, повторяя только 429/5xx и сетевые ошибки.
+
+        None означает, что запрос не удался; пустой список — валидный
+        ответ без подходящих результатов.
+        """
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                with self._session_lock:
+                    response = self.session.request(
+                        method,
+                        self.API_URL,
+                        **request_args,
+                        timeout=self.TIMEOUT,
+                        proxies=self.proxies
+                    )
+
+                if response.status_code == 429:
+                    delay = self._retry_after(response)
+                    if delay is None:
+                        delay = self.SHORT_LIMIT_DELAY
+                    # Не спим часами в обработчике: даже Retry-After ограничиваем.
+                    delay = min(delay, self.MAX_RETRY_DELAY)
+                    if attempt + 1 < self.MAX_RETRIES:
+                        logger.info(f"SauceNAO 429, повтор через {delay:.0f} c")
+                        time.sleep(delay)
+                        continue
+                    logger.error("SauceNAO: исчерпаны повторы после 429")
+                    return None
+
+                if 500 <= response.status_code < 600:
+                    if attempt + 1 < self.MAX_RETRIES:
+                        delay = self._backoff(attempt)
+                        logger.info(
+                            f"SauceNAO {response.status_code}, "
+                            f"повтор через {delay:.0f} c"
+                        )
+                        time.sleep(delay)
+                        continue
+                    logger.error(
+                        f"SauceNAO: сервер вернул {response.status_code}"
+                    )
+                    return None
+
+                if response.status_code == 413:
+                    logger.error("SauceNAO: файл слишком большой")
+                    return None
+
+                response.raise_for_status()
+                return self.resp_handle(self._process_response(response))
+
+            except SauceNaoTooManyRequests as exc:
+                if exc.daily_limit:
+                    self.daily_limit_time = time.time()
+                    logger.warning(exc.message)
+                    return None
+                if attempt + 1 < self.MAX_RETRIES:
+                    logger.info(
+                        f"SauceNAO: короткий лимит, "
+                        f"повтор через {self.SHORT_LIMIT_DELAY:.0f} c"
+                    )
+                    time.sleep(self.SHORT_LIMIT_DELAY)
+                    continue
+                return None
+            except SauseNAOException as exc:
+                logger.error(f"SauceNAO API error: {exc}")
+                return None
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response else "?"
+                logger.error(f"SauceNAO HTTP error {status}: {exc}")
+                return None
+            except requests.RequestException as exc:
+                logger.error(f"SauceNAO request failed: {exc}")
+                if attempt + 1 < self.MAX_RETRIES:
+                    delay = self._backoff(attempt)
+                    logger.info(f"Повтор SauceNAO через {delay:.0f} c")
+                    time.sleep(delay)
+                    continue
+                return None
+            except (TypeError, ValueError, AttributeError, KeyError) as exc:
+                logger.error(f"SauceNAO invalid response: {exc}")
+                return None
+
+        return None
 
     def _process_response(self, response: requests.Response) -> ResponseJSON:
         """Обработка и валидация ответа"""
@@ -299,7 +389,6 @@ class SauceNAO(BaseSauceNAO):
         
         return ResponseJSON(**json_data)
 
-    @cachetools.cached(BaseSauceNAO._cache, key=BaseSauceNAO._get_cache_key)
     def search_url(self, url: str) -> list[Result]:
         """Поиск изображения с помощью сервиса
 
@@ -307,14 +396,21 @@ class SauceNAO(BaseSauceNAO):
 
         Возвращается список словарей-результатов поиска
         """
-        # Проверка на достижение дневного лимита и ожидание/завершение поиска
+        key = self._cache_key_for_url(url)
+        with self._cache_lock:
+            if key in self._cache:
+                return self._cache[key]
         if self._handle_rate_limit():
             return []
 
         params = self._build_params(url=url)
-        return self._execute_search("GET", params=params)
+        results = self._execute_search("GET", params=params)
+        if results is not None:
+            with self._cache_lock:
+                self._cache[key] = results
+            return results
+        return []
 
-    @cachetools.cached(BaseSauceNAO._cache, key=BaseSauceNAO._get_cache_key)
     def search_file(self, file: IOBase|bytes) -> list[Result]:
         """Поиск изображения с помощью сервиса
 
@@ -322,14 +418,23 @@ class SauceNAO(BaseSauceNAO):
 
         Возвращается список словарей-результатов поиска
         """
-        # Проверка на достижение дневного лимита и ожидание/завершение поиска
+        content = self._read_file_content(file)
+        key = self._cache_key_for_content(content)
+        with self._cache_lock:
+            if key in self._cache:
+                return self._cache[key]
         if self._handle_rate_limit():
             return []
 
         params = self._build_params()
-        files = {'file': ("image.png", self._read_file_content(file))}
+        files = {'file': ("image.png", content)}
 
-        return self._execute_search("POST", params=params, files=files)
+        results = self._execute_search("POST", params=params, files=files)
+        if results is not None:
+            with self._cache_lock:
+                self._cache[key] = results
+            return results
+        return []
 
     def get_sources(self, file: str|IOBase|bytes) -> list[str]:
         """Получение списка ссылок-источников для заданного файла
