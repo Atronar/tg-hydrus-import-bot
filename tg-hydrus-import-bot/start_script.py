@@ -176,6 +176,8 @@ async def start_script():
         logger.info("Telegram Bot API: используется прокси")
     bot = Bot(token=CONF.TG_BOT_TOKEN, session=session)
     dp = Dispatcher()
+    # Единый фильтр для всех сообщений: только администраторы из конфига
+    dp.message.filter(F.from_user.id.in_(CONF.TG_ADMIN_ID))
     hydrus = await run_hydrus(
         HydrusRequests,
         CONF.HYDRUS_TOKEN,
@@ -189,7 +191,7 @@ async def start_script():
     else:
         sauce_nao = None
 
-    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.text.contains('/to_tags'))
+    @dp.message(F.text.contains('/to_tags'))
     async def to_tags_handler(msg: Message):
         logger.info("Запуск to_tags_handler")
         if not msg.text:
@@ -206,7 +208,7 @@ async def start_script():
                 parse_mode="HTML"
             )
 
-    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.text.contains('/to_hashtags'))
+    @dp.message(F.text.contains('/to_hashtags'))
     async def to_hashtags_handler(msg: Message):
         logger.info("Запуск to_hashtags_handler")
         if not msg.text:
@@ -221,7 +223,7 @@ async def start_script():
         logger.info(f"Отправленный ответ: {reply[:100]}")
         await answer_long_with_retry(msg, reply)
 
-    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.text.contains('/sauce_by_hash'))
+    @dp.message(F.text.contains('/sauce_by_hash'))
     async def sauce_by_hash_handler(msg: Message):
         logger.info("Запуск sauce_by_hash_handler")
         if not msg.text:
@@ -263,7 +265,7 @@ async def start_script():
             logger.info(f"Отправленный ответ: {reply[:100]}")
             await answer_long_with_retry(msg, reply)
 
-    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.text.contains('/tags_by_hash'))
+    @dp.message(F.text.contains('/tags_by_hash'))
     async def tags_by_hash_handler(msg: Message):
         logger.info("Запуск tags_by_hash_handler")
         if not msg.text:
@@ -287,7 +289,7 @@ async def start_script():
             logger.info(f"Отправленный ответ: {reply[:100]}")
             await answer_long_with_retry(msg, reply)
 
-    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.text.contains('/hashtags_by_hash'))
+    @dp.message(F.text.contains('/hashtags_by_hash'))
     async def hashtags_by_hash_handler(msg: Message):
         logger.info("Запуск hashtags_by_hash_handler")
         if not msg.text:
@@ -315,7 +317,7 @@ async def start_script():
             logger.info(f"Отправленный ответ: {reply[:100]}")
             await answer_long_with_retry(msg, reply)
 
-    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID), F.photo, F.caption.contains('/get_hash'))
+    @dp.message(F.photo, F.caption.contains('/get_hash'))
     async def get_hash_handler(msg: Message):
         logger.info("Запуск get_hash_handler")
         if not msg.photo:
@@ -342,7 +344,7 @@ async def start_script():
         logger.info(f"Отправленный ответ: {reply}")
         await answer_with_retry(msg, reply)
 
-    @dp.message(F.from_user.id.in_(CONF.TG_ADMIN_ID))
+    @dp.message()
     async def message_handler(msg: Message):
         logger.info("Запуск message_handler")
         if msg_content := msg.photo:
