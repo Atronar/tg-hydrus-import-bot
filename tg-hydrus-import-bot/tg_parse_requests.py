@@ -25,7 +25,9 @@ MAX_PHOTO_SIZE = 10000000 # 10 Mb
 JPEG_QUALITIES = (90, 85, 80, 75)
 SCALE_STEP = 0.85
 
-HASHTAG_PATTERN = re.compile(r"#([^\s#@]+)") # regex для хэштегов
+# Хэштег не должен начинаться внутри слова или URL-пути:
+# https://example.com/page#section — это якорь, а не тег.
+HASHTAG_PATTERN = re.compile(r"(?<![\w/])#([^\s#@]+)")
 
 def mime_subtype(mime_type: str|None, default: str = "") -> str:
     """Возвращает подтип MIME без параметров, например video/mp4 -> mp4."""

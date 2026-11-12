@@ -41,6 +41,16 @@ class TagsTests(unittest.TestCase):
             ["foo bar", "baz"],
         )
 
+    def test_ignores_url_fragments(self):
+        self.assertEqual(
+            get_tags_from_str("https://example.com/page#section"),
+            [],
+        )
+        self.assertEqual(
+            get_tags_from_str("foo#bar"),
+            [],
+        )
+
     def test_get_tags_from_msg_text_and_caption(self):
         self.assertEqual(
             get_tags_from_msg(SimpleNamespace(text="#one", caption=None)),
