@@ -548,10 +548,28 @@ class ConvertResponseTests(unittest.TestCase):
         result = HydrusRequests.convert_import_resp_to_str(
             [{"status": 1, "hash": "abc"}, {"status": 2, "hash": "def"}]
         )
-        self.assertIn("status: 1", result)
+        self.assertIn("status: успешно импортирован (1)", result)
         self.assertIn("hash: abc", result)
-        self.assertIn("status: 2", result)
+        self.assertIn("status: уже есть в базе (2)", result)
         self.assertIn("hash: def", result)
+
+    def test_reports_failed_and_vetoed_statuses(self):
+        result = HydrusRequests.convert_import_resp_to_str(
+            [
+                {"status": 4, "hash": "failed"},
+                {"status": 7, "hash": "vetoed"},
+                {"status": 3, "hash": "deleted"},
+            ]
+        )
+        self.assertIn("не удалось импортировать (4)", result)
+        self.assertIn("отклонён (7)", result)
+        self.assertIn("ранее удалён (3)", result)
+
+    def test_reports_unknown_status(self):
+        result = HydrusRequests.convert_import_resp_to_str(
+            [{"status": 99, "hash": "abc"}]
+        )
+        self.assertIn("status: неизвестный статус 99", result)
 
 
 if __name__ == "__main__":

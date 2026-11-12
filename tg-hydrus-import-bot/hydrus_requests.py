@@ -21,6 +21,15 @@ URL_IMPORT_TIMEOUT = 60.0
 URL_IMPORT_INITIAL_DELAY = 2.0
 URL_IMPORT_MAX_DELAY = 15.0
 
+# Человекочитаемые названия статусов импорта Hydrus
+_ADDED_FILE_STATUS_NAMES = {
+    AddedFileStatus.SUCCESSFULLY_IMPORTED: "успешно импортирован",
+    AddedFileStatus.ALREADY_IN_DATABASE: "уже есть в базе",
+    AddedFileStatus.PREVIOUSLY_DELETED: "ранее удалён",
+    AddedFileStatus.FAILED_TO_IMPORT: "не удалось импортировать",
+    AddedFileStatus.VETOED: "отклонён",
+}
+
 
 class HydrusRequests:
     """Основной класс модуля
@@ -613,13 +622,23 @@ class HydrusRequests:
             Человекочитаемый текст, каждый ответ отделён пустой строкой,
             а содержимое ответов расписано построчно
         """
-        return '\n\n'.join(
-            '\n'.join(
-                ': '.join(map(str, resp_dict_tuple_item))
-                for resp_dict_tuple_item in resp_item.items()
-            )
-            for resp_item in resp
-        )
+        replies: list[str] = []
+        for resp_item in resp:
+            parts: list[str] = []
+            for key, value in resp_item.items():
+                if key != "status":
+                    parts.append(f"{key}: {value}")
+                    continue
+                try:
+                    status = AddedFileStatus(value)
+                except (TypeError, ValueError):
+                    parts.append(f"status: неизвестный статус {value}")
+                else:
+                    parts.append(
+                        f"status: {_ADDED_FILE_STATUS_NAMES[status]} ({value})"
+                    )
+            replies.append('\n'.join(parts))
+        return '\n\n'.join(replies)
 
     def get_main_file_hash(self, file_hash: str) -> str|None:
         """Получение основного хэша файла
