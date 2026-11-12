@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 from aiogram import F, exceptions
 import hydrus_api
@@ -27,6 +28,20 @@ from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
     answer_disabled_content, send_content_from_response, get_success_reply_str
 
 MAX_MESSAGE_LENGTH = 4000
+
+HELP_TEXT = """Бот импортирует контент из Telegram в Hydrus Network.
+
+Отправьте фото, видео, анимацию, видеосообщение, аудио, голосовое сообщение, документ или текст. Теги-хештеги и ссылки берутся из подписи или текста сообщения.
+
+Команды:
+/to_tags — показать теги, извлечённые из хештегов в сообщении
+/to_hashtags — преобразовать построчный список тегов в хештеги
+/sauce_by_hash <хэш>... — найти источники через SauceNAO и импортировать их
+/tags_by_hash <хэш>... — показать теги файлов по хэшам
+/hashtags_by_hash <хэш>... — показать хештеги файлов по хэшам
+/get_hash — в подписи к фото: показать перцептивный хэш изображения
+
+Командам с хэшами нужны права Hydrus "search and fetch files" и "manage file relationships". Команды SauceNAO работают, только если задан SAUCENAO_TOKEN."""
 
 # Все синхронные запросы к Hydrus идут через один поток:
 # это не блокирует event loop и не даёт использовать requests.Session конкурентно.
@@ -226,6 +241,16 @@ async def start_script():
         sauce_nao.set_similarity(80)
     else:
         sauce_nao = None
+
+    @dp.message(CommandStart())
+    async def start_handler(msg: Message):
+        logger.info("Запуск start_handler")
+        await answer_with_retry(msg, HELP_TEXT)
+
+    @dp.message(Command("help"))
+    async def help_handler(msg: Message):
+        logger.info("Запуск help_handler")
+        await answer_with_retry(msg, HELP_TEXT)
 
     @dp.message(F.text.contains('/to_tags'))
     async def to_tags_handler(msg: Message):

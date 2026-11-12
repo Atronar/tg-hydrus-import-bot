@@ -10,6 +10,7 @@ from aiogram import exceptions
 import hydrus_api
 
 from start_script import (
+    HELP_TEXT,
     MAX_MESSAGE_LENGTH,
     answer_long_with_retry,
     answer_with_retry,
@@ -234,6 +235,20 @@ class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):
             return "ok"
 
         self.assertEqual(await handler(FakeMessage()), "ok")
+
+
+class HelpTextTests(unittest.TestCase):
+    def test_lists_all_commands(self):
+        for command in (
+            "/to_tags",
+            "/to_hashtags",
+            "/sauce_by_hash",
+            "/tags_by_hash",
+            "/hashtags_by_hash",
+            "/get_hash",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(command, HELP_TEXT)
 
 
 class RunHydrusTests(unittest.IsolatedAsyncioTestCase):
