@@ -216,6 +216,19 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(msg.media[0][0], "audio")
         self.assertEqual(msg.media_data[0][1], b"mp3")
 
+    async def test_send_audio_mpeg(self):
+        msg = FakeMessage()
+        response = FakeResponse(
+            content=b"mp3",
+            headers={
+                "Content-Type": "audio/mpeg",
+                "Content-Length": "3",
+            },
+        )
+        await send_content_from_response(response, msg, "audio.mp3")
+        self.assertEqual(msg.media[0][0], "audio")
+        self.assertEqual(msg.media_data[0][1], b"mp3")
+
     async def test_send_mp4_video_as_file(self):
         content = MediaTests._make_video("mp4")
         msg = FakeMessage()

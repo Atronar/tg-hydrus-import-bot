@@ -200,6 +200,9 @@ _CONTENT_SUFFIXES = {
     "audio/m4a": ".m4a",
 }
 
+# Типы, которые Telegram принимает как аудио (answer_audio)
+_AUDIO_CONTENT_TYPES = {"audio/mp3", "audio/mpeg", "audio/m4a"}
+
 def _suffix_for_content_type(content_type: str) -> str:
     """Возвращает безопасное расширение для временного файла."""
     if content_type in _CONTENT_SUFFIXES:
@@ -339,7 +342,7 @@ async def send_content_from_response(
                     logger.warning(f"Файл превысил лимит для фото: {file_size} байт")
                     input_file = FSInputFile(temp_path, filename)
                     answer_function = msg.answer_document
-        elif content_type in ("audio/mp3", "audio/m4a"):
+        elif content_type in _AUDIO_CONTENT_TYPES:
             input_file = FSInputFile(temp_path, filename)
             answer_function = msg.answer_audio
         else:
