@@ -500,16 +500,6 @@ async def start_script():
                 )
             finally:
                 remove_temp_file(content_file)
-        # elif msg_content := msg.animation:
-        #    if not (msg.animation and "animation" in CONF.CONTENT_TYPES):
-        #        await answer_disabled_content(msg, type(msg_content).__name__)
-        #        return
-        #     ...
-        # elif msg_content := msg.video_note:
-        #    if not (msg.video_note and "video_note" in CONF.CONTENT_TYPES):
-        #        await answer_disabled_content(msg, type(msg_content).__name__)
-        #        return
-        #     ...
         elif msg_content := (msg.audio or msg.voice):
             if not ((msg.audio and "audio" in CONF.CONTENT_TYPES) \
                 or (msg.voice and "voice" in CONF.CONTENT_TYPES)):
@@ -554,11 +544,6 @@ async def start_script():
                 )
             finally:
                 remove_temp_file(content_file)
-        # elif msg_content := msg.voice:
-        #    if not (msg.voice and "voice" in CONF.CONTENT_TYPES):
-        #        await answer_disabled_content(msg, type(msg_content).__name__)
-        #        return
-        #     ...
         elif msg_content := msg.document:
             if not (msg.document and "document" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, type(msg_content).__name__)

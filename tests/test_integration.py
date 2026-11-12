@@ -14,7 +14,6 @@ import asyncio
 import json
 import os
 import unittest
-from pathlib import Path
 
 import hydrus_api
 import requests
