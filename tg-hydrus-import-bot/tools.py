@@ -185,11 +185,31 @@ def multiline_to_hashtags(string: str, remove_namespaces: bool=False) -> str:
     )
 
 def split_text(text: str, fragment_size: int) -> list[str]:
-    """Разбивает большой текст на фрагменты указанного размера."""
-    return [
-        text[fragment : fragment + fragment_size]
-        for fragment in range(0, len(text), fragment_size)
-    ]
+    """Разбивает текст на фрагменты не длиннее fragment_size.
+
+    Telegram считает длину в единицах UTF-16, поэтому символы вне BMP
+    (эмодзи) занимают две единицы. Обычный срез по символам мог отправить
+    сообщение длиннее лимита и получить BadRequest.
+    """
+    if fragment_size <= 0:
+        raise ValueError("fragment_size должен быть положительным")
+    if not text:
+        return []
+
+    fragments: list[str] = []
+    start = 0
+    units = 0
+    for index, char in enumerate(text):
+        char_units = 2 if ord(char) > 0xFFFF else 1
+        # Не разрываем суррогатную пару, даже если она не влезает в лимит.
+        if units + char_units > fragment_size and index > start:
+            fragments.append(text[start:index])
+            start = index
+            units = 0
+        units += char_units
+    if start < len(text):
+        fragments.append(text[start:])
+    return fragments
 
 _SCHEME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", re.IGNORECASE)
 

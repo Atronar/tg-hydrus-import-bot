@@ -74,6 +74,20 @@ class TextHelpersTests(unittest.TestCase):
         self.assertEqual(split_text("", 2), [])
         self.assertEqual(split_text("abc", 10), ["abc"])
 
+    def test_split_text_counts_utf16_units(self):
+        parts = split_text("😀" * 3000, 4000)
+        self.assertEqual([len(part) for part in parts], [2000, 1000])
+        for part in parts:
+            units = sum(2 if ord(char) > 0xFFFF else 1 for char in part)
+            self.assertLessEqual(units, 4000)
+
+    def test_split_text_does_not_split_surrogate_pair(self):
+        self.assertEqual(split_text("😀😀", 3), ["😀", "😀"])
+
+    def test_split_text_rejects_non_positive_size(self):
+        with self.assertRaises(ValueError):
+            split_text("abc", 0)
+
     def test_url_with_schema(self):
         self.assertEqual(url_with_schema("https://example.com"), "https://example.com")
         self.assertEqual(url_with_schema("HTTP://example.com"), "HTTP://example.com")
