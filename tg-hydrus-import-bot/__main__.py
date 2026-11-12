@@ -18,7 +18,11 @@ from config import CONF
 logger.remove()
 logger.add(
     sys.stderr,
-    level=CONF.LOG_LEVEL
+    level=CONF.LOG_LEVEL,
+    # Не показывать значения локальных переменных в traceback:
+    # там могут оказаться токены Telegram/Hydrus/SauceNAO.
+    diagnose=False,
+    backtrace=False,
 )
 logger.add(
     CONF.LOG_PATH,
@@ -26,6 +30,8 @@ logger.add(
     level=CONF.LOG_LEVEL,
     rotation="1 week",
     compression="zip",
+    diagnose=False,
+    backtrace=False,
 )
 
 logger.info("Программа запущена.")
