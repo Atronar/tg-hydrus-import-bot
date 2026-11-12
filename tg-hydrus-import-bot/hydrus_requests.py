@@ -1,9 +1,11 @@
 ﻿"""
 Модуль связанный с запросами к Гидрусу
 """
+import ipaddress
 import os
 import time
 from typing import Iterable, cast
+from urllib.parse import urlparse
 from cachetools import TTLCache
 import hydrus_api
 from loguru import logger
@@ -62,6 +64,28 @@ class HydrusRequests:
         )
         self.get_permission_info()
 
+    @staticmethod
+    def _is_loopback_host(host: str) -> bool:
+        """Проверяет, что хост относится к локальной машине."""
+        if host.lower() in ("localhost", "127.0.0.1", "::1"):
+            return True
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    @classmethod
+    def _warn_if_insecure_api_url(cls, api_url: str|None) -> None:
+        """Предупреждает о передаче токена Hydrus по незашифрованному HTTP."""
+        if not api_url:
+            return
+        parsed = urlparse(api_url)
+        if parsed.scheme == "http" and not cls._is_loopback_host(parsed.hostname or ""):
+            logger.warning(
+                "HYDRUS_API_URL использует HTTP: токен Hydrus передаётся "
+                "по сети без шифрования. Используйте HTTPS или localhost."
+            )
+
     def set_client(self, hydrus: hydrus_api.Client|str, *, api_url: str|None = None):
         """Установка значения клиента
 
@@ -81,6 +105,9 @@ class HydrusRequests:
             self.client = hydrus_api.Client(access_key=hydrus, api_url=api_url)
         else:
             self.client = hydrus
+        self._warn_if_insecure_api_url(
+            getattr(self.client, "api_url", None) or api_url
+        )
 
     def set_default_tags_namespace(self, tags_namespace: str|None):
         """Установка тегового пространства по умолчанию"""

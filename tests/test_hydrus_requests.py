@@ -469,6 +469,33 @@ class CacheTests(unittest.TestCase):
         )
 
 
+class InsecureApiUrlTests(unittest.TestCase):
+    def test_warns_for_remote_http(self):
+        with patch("hydrus_requests.logger.warning") as warning:
+            HydrusRequests._warn_if_insecure_api_url(
+                "http://hydrus.example.com:45869"
+            )
+        warning.assert_called_once()
+
+    def test_does_not_warn_for_loopback_http(self):
+        for url in (
+            "http://127.0.0.1:45869",
+            "http://localhost:45869",
+            "http://[::1]:45869",
+        ):
+            with self.subTest(url=url):
+                with patch("hydrus_requests.logger.warning") as warning:
+                    HydrusRequests._warn_if_insecure_api_url(url)
+                warning.assert_not_called()
+
+    def test_does_not_warn_for_https(self):
+        with patch("hydrus_requests.logger.warning") as warning:
+            HydrusRequests._warn_if_insecure_api_url(
+                "https://hydrus.example.com:45869"
+            )
+        warning.assert_not_called()
+
+
 class ConvertResponseTests(unittest.TestCase):
     def test_converts_list_of_dicts(self):
         result = HydrusRequests.convert_import_resp_to_str(
