@@ -131,13 +131,18 @@ class TempFolderTests(unittest.TestCase):
 
     def test_creates_and_clears_safe_folder(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir) / "temp"
-            with patch.object(tools.CONF, "TEMP_PATH", str(temp_path)):
+            base_path = Path(temp_dir) / "temp"
+            temp_path = base_path / tools.TEMP_SUBDIR
+            with patch.object(tools.CONF, "TEMP_PATH", str(base_path)):
                 prepare_temp_folder()
+                self.assertTrue(base_path.is_dir())
                 self.assertTrue(temp_path.is_dir())
+                (base_path / "keep.txt").write_bytes(b"keep")
                 (temp_path / "old.tmp").write_bytes(b"old")
                 prepare_temp_folder()
+                self.assertTrue(base_path.is_dir())
                 self.assertTrue(temp_path.is_dir())
+                self.assertTrue((base_path / "keep.txt").exists())
                 self.assertFalse((temp_path / "old.tmp").exists())
 
     def test_get_temp_folder_expands_environment_variable(self):
@@ -150,7 +155,7 @@ class TempFolderTests(unittest.TestCase):
                 ):
                     self.assertEqual(
                         get_temp_folder(),
-                        Path(temp_dir) / "temp",
+                        Path(temp_dir) / "temp" / tools.TEMP_SUBDIR,
                     )
 
 

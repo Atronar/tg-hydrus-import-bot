@@ -8,6 +8,10 @@ from human_bytes import HumanBytes
 from config import CONF
 
 
+TEMP_SUBDIR = "tg-hydrus-import-bot"
+"""Подкаталог TEMP_PATH, который принадлежит боту и может очищаться."""
+
+
 def _validate_temp_path(temp_path: str|os.PathLike) -> Path:
     """Проверяет, что временную папку безопасно очищать.
 
@@ -41,17 +45,37 @@ def _validate_temp_path(temp_path: str|os.PathLike) -> Path:
     return path
 
 
+def _validate_temp_subfolder(base: Path) -> Path:
+    """Возвращает безопасный подкаталог бота внутри TEMP_PATH."""
+    subfolder = base / TEMP_SUBDIR
+    if subfolder.is_symlink():
+        raise ValueError(
+            f"Подкаталог временной папки не может быть символической ссылкой: {subfolder}"
+        )
+    resolved = subfolder.resolve()
+    if resolved.exists() and not resolved.is_dir():
+        raise NotADirectoryError(
+            f"Подкаталог временной папки не является каталогом: {resolved}"
+        )
+    return resolved
+
+
 def prepare_temp_folder():
-    """Создаёт, либо очищает временную папку"""
+    """Создаёт, либо очищает временную папку бота.
+
+    Очищается только подкаталог TEMP_SUBDIR: содержимое TEMP_PATH
+    и другие каталоги рядом с ним не затрагиваются.
+    """
     try:
-        temp_path = _validate_temp_path(CONF.TEMP_PATH)
+        base = _validate_temp_path(CONF.TEMP_PATH)
+        base.mkdir(parents=True, exist_ok=True)
+        temp_path = _validate_temp_subfolder(base)
         if temp_path.exists():
             shutil.rmtree(temp_path)
-            temp_path.mkdir(parents=True, exist_ok=True)
             logger.info("Временные файлы удалены")
         else:
-            temp_path.mkdir(parents=True, exist_ok=True)
             logger.info(f"Создана папка временных файлов по пути {temp_path}")
+        temp_path.mkdir(parents=True, exist_ok=True)
     except PermissionError as e:
         logger.error(f"Ошибка доступа: {e}")
         raise
@@ -61,8 +85,12 @@ def prepare_temp_folder():
 
 
 def get_temp_folder() -> Path:
-    """Возвращает путь ко временной папке"""
-    return _validate_temp_path(CONF.TEMP_PATH)
+    """Возвращает путь ко временной папке бота, создавая её при необходимости"""
+    base = _validate_temp_path(CONF.TEMP_PATH)
+    base.mkdir(parents=True, exist_ok=True)
+    temp_path = _validate_temp_subfolder(base)
+    temp_path.mkdir(parents=True, exist_ok=True)
+    return temp_path
 
 
 def prepare_text_for_html(text: str) -> str:
