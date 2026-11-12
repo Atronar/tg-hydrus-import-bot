@@ -5,8 +5,14 @@ import unittest
 from io import BytesIO
 from unittest.mock import Mock, patch
 
+import requests
+
 from hydrus_api_enums import HydrusPermission
-from hydrus_requests import HydrusRequests
+from hydrus_requests import (
+    HYDRUS_TIMEOUT,
+    HydrusRequests,
+    _TimeoutSession,
+)
 from tests.helpers import FakeHydrusClient, make_hydrus
 
 
@@ -570,6 +576,41 @@ class ConvertResponseTests(unittest.TestCase):
             [{"status": 99, "hash": "abc"}]
         )
         self.assertIn("status: неизвестный статус 99", result)
+
+
+class TimeoutSessionTests(unittest.TestCase):
+    def test_default_timeout_is_applied(self):
+        session = _TimeoutSession()
+        with patch.object(
+            requests.Session, "request", return_value=Mock()
+        ) as request:
+            session.request("GET", "https://hydrus.example.com")
+        request.assert_called_once()
+        self.assertEqual(
+            request.call_args.kwargs["timeout"],
+            HYDRUS_TIMEOUT,
+        )
+
+    def test_explicit_timeout_is_preserved(self):
+        session = _TimeoutSession()
+        with patch.object(
+            requests.Session, "request", return_value=Mock()
+        ) as request:
+            session.request("GET", "https://hydrus.example.com", timeout=(1, 2))
+        self.assertEqual(request.call_args.kwargs["timeout"], (1, 2))
+
+    @patch("hydrus_requests.hydrus_api.Client")
+    def test_token_client_uses_timeout_session(self, client_class):
+        client_class.return_value.verify_access_key.return_value = {
+            "basic_permissions": []
+        }
+        client_class.return_value.api_url = "https://hydrus.example.com"
+
+        HydrusRequests("a" * 64)
+
+        session = client_class.call_args.kwargs["session"]
+        self.assertIsInstance(session, _TimeoutSession)
+        self.assertEqual(session._timeout, HYDRUS_TIMEOUT)
 
 
 if __name__ == "__main__":

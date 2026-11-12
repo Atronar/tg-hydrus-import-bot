@@ -10,8 +10,29 @@ from urllib.parse import urlparse
 from cachetools import TTLCache
 import hydrus_api
 from loguru import logger
+import requests
 from hydrus_api_enums import HydrusPermission, AddedFileStatus
 import hydrus_api_typing
+
+
+HYDRUS_TIMEOUT = (5.0, 60.0)
+"""Таймаут (подключение, чтение) для запросов к Hydrus API."""
+
+
+class _TimeoutSession(requests.Session):
+    """Сессия requests с таймаутом по умолчанию.
+
+    hydrus_api не задаёт таймаут, поэтому без него зависший Hydrus
+    блокирует единственный поток обработки запросов.
+    """
+
+    def __init__(self, timeout: tuple[float, float] = HYDRUS_TIMEOUT):
+        super().__init__()
+        self._timeout = timeout
+
+    def request(self, *args, **kwargs):
+        kwargs.setdefault("timeout", self._timeout)
+        return super().request(*args, **kwargs)
 
 
 # Импорт по ссылкам в Hydrus асинхронный: после add_url статус
@@ -112,7 +133,11 @@ class HydrusRequests:
         if isinstance(hydrus, str):
             if not api_url:
                 api_url = hydrus_api.DEFAULT_API_URL
-            self.client = hydrus_api.Client(access_key=hydrus, api_url=api_url)
+            self.client = hydrus_api.Client(
+                access_key=hydrus,
+                api_url=api_url,
+                session=_TimeoutSession()
+            )
         else:
             self.client = hydrus
         self._warn_if_insecure_api_url(
