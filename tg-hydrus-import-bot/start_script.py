@@ -25,7 +25,8 @@ from tools import get_temp_folder, multiline_to_hashtags, split_text
 from hydrus_requests import HydrusRequests
 from saucenao_api import SauceNAO, SauseNAOException
 from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
-    answer_disabled_content, send_content_from_response, get_success_reply_str
+    answer_disabled_content, send_content_from_response, get_success_reply_str, \
+    mime_subtype
 
 MAX_MESSAGE_LENGTH = 4000
 
@@ -470,7 +471,10 @@ async def start_script():
                 await answer_disabled_content(msg, type(msg_content).__name__)
                 return
 
-            file_format = getattr(msg_content, "mime_type", "mp4").split('/')[-1]
+            file_format = mime_subtype(
+                getattr(msg_content, "mime_type", None),
+                "mp4"
+            )
             content_file = make_temp_file_path(
                 msg_content.file_unique_id,
                 file_format
@@ -507,10 +511,8 @@ async def start_script():
                 await answer_disabled_content(msg, type(msg_content).__name__)
                 return
 
-            if mime_type := msg_content.mime_type:
-                file_format = "mp3" if mime_type=="audio/mpeg" else mime_type.split('/')[-1]
-            else:
-                file_format = "mp3"
+            mime = mime_subtype(msg_content.mime_type)
+            file_format = "mp3" if mime in ("mpeg", "mp3") else (mime or "mp3")
             content_file = make_temp_file_path(
                 msg_content.file_unique_id,
                 file_format
@@ -550,10 +552,7 @@ async def start_script():
                 await answer_disabled_content(msg, type(msg_content).__name__)
                 return
 
-            if mime_type := msg_content.mime_type:
-                file_format = mime_type.split('/')[-1]
-            else:
-                file_format = ""
+            file_format = mime_subtype(msg_content.mime_type)
             content_file = make_temp_file_path(
                 msg_content.file_unique_id,
                 file_format

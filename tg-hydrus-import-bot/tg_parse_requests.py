@@ -27,6 +27,12 @@ SCALE_STEP = 0.85
 
 HASHTAG_PATTERN = re.compile(r"#([^\s#@]+)") # regex для хэштегов
 
+def mime_subtype(mime_type: str|None, default: str = "") -> str:
+    """Возвращает подтип MIME без параметров, например video/mp4 -> mp4."""
+    if not mime_type:
+        return default
+    return mime_type.split(";", 1)[0].split("/", 1)[-1].strip()
+
 def get_tags_from_msg(msg: Message) -> list[str]:
     """Достаёт из объекта сообщения телеграм список хештегов,
     заменяя подчёркивания на пробелы и отрезая символ #

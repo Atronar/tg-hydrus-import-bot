@@ -28,6 +28,7 @@ from tg_parse_requests import (
     get_tags_from_str,
     get_urls_from_entities,
     get_urls_from_msg,
+    mime_subtype,
     send_content_from_response,
 )
 from tests.helpers import FakeMessage, FakeResponse
@@ -52,6 +53,22 @@ class TagsTests(unittest.TestCase):
         self.assertEqual(
             get_tags_from_msg(SimpleNamespace(text=None, caption=None)),
             [],
+        )
+
+
+class MimeSubtypeTests(unittest.TestCase):
+    def test_missing_mime_type_returns_default(self):
+        self.assertEqual(mime_subtype(None, "mp4"), "mp4")
+        self.assertEqual(mime_subtype("", "mp4"), "mp4")
+
+    def test_extracts_subtype(self):
+        self.assertEqual(mime_subtype("video/mp4"), "mp4")
+        self.assertEqual(mime_subtype("application/pdf"), "pdf")
+
+    def test_ignores_parameters(self):
+        self.assertEqual(
+            mime_subtype("audio/mpeg; charset=utf-8"),
+            "mpeg",
         )
 
 
