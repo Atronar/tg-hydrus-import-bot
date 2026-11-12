@@ -162,6 +162,34 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         # Временный файл удаляется после отправки
         self.assertFalse(Path(file.path).exists())
 
+    async def test_send_document_with_invalid_length(self):
+        msg = FakeMessage(message_id=8)
+        response = FakeResponse(
+            content=b"payload",
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Length": "not-a-number",
+            },
+            chunks=[b"payload"],
+        )
+        await send_content_from_response(response, msg, "file.bin")
+        self.assertEqual(msg.media[0][0], "document")
+        self.assertEqual(msg.media_data[0][1], b"payload")
+
+    async def test_send_document_with_empty_length(self):
+        msg = FakeMessage(message_id=9)
+        response = FakeResponse(
+            content=b"payload",
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Length": "",
+            },
+            chunks=[b"payload"],
+        )
+        await send_content_from_response(response, msg, "file.bin")
+        self.assertEqual(msg.media[0][0], "document")
+        self.assertEqual(msg.media_data[0][1], b"payload")
+
     async def test_send_photo(self):
         msg = FakeMessage()
         response = FakeResponse(

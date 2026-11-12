@@ -10,7 +10,7 @@ import re
 import tempfile
 from functools import partial
 from requests import Response
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Mapping
 
 import aiogram.methods
 from aiogram.types import BufferedInputFile, FSInputFile, Message, MessageEntity
@@ -208,6 +208,21 @@ def _suffix_for_content_type(content_type: str) -> str:
     subtype = re.sub(r"[^A-Za-z0-9]+", "", subtype)[:10]
     return f".{subtype}" if subtype else ""
 
+def _content_length(headers: Mapping[str, str]) -> int:
+    """Возвращает Content-Length или 0, если заголовок отсутствует или некорректен.
+
+    Ноль означает «размер заранее неизвестен»: лимит всё равно проверяется
+    при потоковой записи во временный файл.
+    """
+    value = headers.get("Content-Length")
+    if not value:
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning(f"Некорректный Content-Length: {value!r}")
+        return 0
+
 def _close_response(response: Response) -> None:
     close = getattr(response, "close", None)
     if close:
@@ -265,7 +280,7 @@ async def send_content_from_response(
     """
     content_type = content_file.headers.get("Content-Type", "")
     logger.debug(f"Content-Type: {content_type}")
-    content_length = int(content_file.headers.get("Content-Length", "0"))
+    content_length = _content_length(content_file.headers)
     logger.debug(f"Content-Length: {content_length}")
 
     if content_length > MAX_FILE_SIZE:
