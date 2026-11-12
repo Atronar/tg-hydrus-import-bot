@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from config import ConfigModel, load_config
+from config import ConfigError, ConfigModel, load_config
 from tests import TEST_CONFIG
 
 
@@ -118,6 +118,15 @@ class LoadConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {"TG_BOT_TOKEN": token}):
             config = load_config(self.path)
         self.assertEqual(config.TG_BOT_TOKEN, token)
+
+    def test_malformed_json_raises_config_error(self):
+        self.path.write_text("{", encoding="utf-8")
+        with self.assertRaises(ConfigError):
+            load_config(self.path)
+
+    def test_missing_file_raises_config_error(self):
+        with self.assertRaises(ConfigError):
+            load_config(Path(self.temp_dir.name) / "missing.json")
 
 
 if __name__ == "__main__":

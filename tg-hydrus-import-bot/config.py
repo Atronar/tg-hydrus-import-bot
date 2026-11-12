@@ -76,6 +76,10 @@ class ConfigModel(BaseModel):
     def _expand_path_fields(cls, value: str) -> str:
         return _expand_path(value)
 
+class ConfigError(Exception):
+    """Конфиг не удалось прочитать или разобрать."""
+
+
 __CONFPATH = ".conf.json"
 """Local path to json config"""
 
@@ -90,8 +94,11 @@ _ENV_OVERRIDES = ("TG_BOT_TOKEN", "HYDRUS_TOKEN", "SAUCENAO_TOKEN")
 
 def load_config(path: str|Path = __CONFPATH) -> ConfigModel:
     """Загружает конфиг и применяет переменные окружения до валидации."""
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as ex:
+        raise ConfigError(f"Не удалось прочитать {path}: {ex}") from ex
     for name in _ENV_OVERRIDES:
         if name in os.environ:
             data[name] = os.environ[name]
@@ -101,6 +108,9 @@ def load_config(path: str|Path = __CONFPATH) -> ConfigModel:
 try:
     CONF = load_config()
     """ Global configuration variable """
+except ConfigError as e:
+    print(f"Ошибка конфига: {e}")
+    sys.exit(1)
 except ValidationError as e:
     errors = "\n".join([f"- {err['loc'][0]}: {err['msg']}" for err in e.errors()])
     print(f"Ошибки в конфиге:\n{errors}")
