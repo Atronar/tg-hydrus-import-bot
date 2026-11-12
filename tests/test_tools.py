@@ -1,12 +1,17 @@
 """Тесты чистых функций из tools.py."""
 
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
+import tools
 from tools import (
     bytes_strformat,
     camelCase_to_snake_case,
     make_safe_filename,
     multiline_to_hashtags,
+    prepare_temp_folder,
     split_text,
     url_with_schema,
 )
@@ -91,6 +96,47 @@ class TextHelpersTests(unittest.TestCase):
         self.assertEqual(camelCase_to_snake_case("VideoNote"), "video_note")
         self.assertEqual(camelCase_to_snake_case("JPEGQuality"), "jpeg_quality")
         self.assertEqual(camelCase_to_snake_case("already_snake"), "already_snake")
+
+
+class TempFolderTests(unittest.TestCase):
+    def test_rejects_filesystem_root(self):
+        with patch.object(tools.CONF, "TEMP_PATH", str(Path.cwd().anchor)):
+            with self.assertRaises(ValueError):
+                prepare_temp_folder()
+
+    def test_rejects_current_directory(self):
+        with patch.object(tools.CONF, "TEMP_PATH", str(Path.cwd())):
+            with self.assertRaises(ValueError):
+                prepare_temp_folder()
+
+    def test_rejects_parent_of_current_directory(self):
+        with patch.object(tools.CONF, "TEMP_PATH", str(Path.cwd().parent)):
+            with self.assertRaises(ValueError):
+                prepare_temp_folder()
+
+    def test_rejects_symlink(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "target"
+            target.mkdir()
+            link = Path(temp_dir) / "link"
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("Символические ссылки недоступны")
+            with patch.object(tools.CONF, "TEMP_PATH", str(link)):
+                with self.assertRaises(ValueError):
+                    prepare_temp_folder()
+
+    def test_creates_and_clears_safe_folder(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir) / "temp"
+            with patch.object(tools.CONF, "TEMP_PATH", str(temp_path)):
+                prepare_temp_folder()
+                self.assertTrue(temp_path.is_dir())
+                (temp_path / "old.tmp").write_bytes(b"old")
+                prepare_temp_folder()
+                self.assertTrue(temp_path.is_dir())
+                self.assertFalse((temp_path / "old.tmp").exists())
 
 
 if __name__ == "__main__":

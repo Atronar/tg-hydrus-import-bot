@@ -8,16 +8,47 @@ from human_bytes import HumanBytes
 from config import CONF
 
 
+def _validate_temp_path(temp_path: str|os.PathLike) -> Path:
+    """Проверяет, что временную папку безопасно очищать.
+
+    Защищает от случайного rmtree корня диска, домашнего каталога,
+    текущего каталога и каталога, внутри которого находится проект.
+    """
+    raw_path = Path(temp_path).expanduser()
+    if raw_path.is_symlink():
+        raise ValueError(f"Временная папка не может быть символической ссылкой: {raw_path}")
+
+    path = raw_path.resolve()
+    cwd = Path.cwd().resolve()
+    project_root = Path(__file__).resolve().parent.parent
+
+    if path == Path(path.anchor):
+        raise ValueError(f"Нельзя использовать корень диска как временную папку: {path}")
+    if path == Path.home().resolve():
+        raise ValueError(f"Нельзя использовать домашний каталог как временную папку: {path}")
+    if cwd.is_relative_to(path):
+        raise ValueError(
+            f"Временная папка не должна содержать текущий каталог: {path}"
+        )
+    if project_root.is_relative_to(path):
+        raise ValueError(
+            f"Временная папка не должна содержать каталог проекта: {path}"
+        )
+    if path.exists() and not path.is_dir():
+        raise NotADirectoryError(f"Временный путь не является каталогом: {path}")
+    return path
+
+
 def prepare_temp_folder():
     """Создаёт, либо очищает временную папку"""
     try:
-        temp_path = CONF.TEMP_PATH
-        if os.path.exists(temp_path):
+        temp_path = _validate_temp_path(CONF.TEMP_PATH)
+        if temp_path.exists():
             shutil.rmtree(temp_path)
-            os.makedirs(temp_path, exist_ok=True)
+            temp_path.mkdir(parents=True, exist_ok=True)
             logger.info("Временные файлы удалены")
         else:
-            os.makedirs(temp_path)
+            temp_path.mkdir(parents=True, exist_ok=True)
             logger.info(f"Создана папка временных файлов по пути {temp_path}")
     except PermissionError as e:
         logger.error(f"Ошибка доступа: {e}")
@@ -29,7 +60,7 @@ def prepare_temp_folder():
 
 def get_temp_folder() -> Path:
     """Возвращает путь ко временной папке"""
-    return Path(CONF.TEMP_PATH).resolve()
+    return _validate_temp_path(CONF.TEMP_PATH)
 
 
 def prepare_text_for_html(text: str) -> str:
