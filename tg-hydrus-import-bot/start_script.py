@@ -367,7 +367,7 @@ async def start_script():
                 await answer_disabled_content(msg, "photo")
                 return
 
-            msg_content = msg_content.pop()
+            msg_content = msg_content[-1]
             content_file = io.BytesIO()
 
             # Из текста достаём теги и ссылки
