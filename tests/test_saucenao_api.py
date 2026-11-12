@@ -8,6 +8,7 @@ import requests
 
 from saucenao_api import (
     SauceNAO,
+    SauceNAOError,
     SauceNaoTooManyRequests,
     SauseNAOException,
 )
@@ -226,7 +227,8 @@ class RequestRetryTests(unittest.TestCase):
             ) as request,
             patch("saucenao_api.time.sleep") as sleep,
         ):
-            self.assertIsNone(self.sauce._execute_search("GET"))
+            with self.assertRaises(SauceNAOError):
+                self.sauce._execute_search("GET")
 
         self.assertEqual(request.call_count, 1)
         sleep.assert_not_called()
@@ -248,10 +250,29 @@ class RequestRetryTests(unittest.TestCase):
             ),
             patch("saucenao_api.time.sleep") as sleep,
         ):
-            self.assertIsNone(self.sauce._execute_search("GET"))
+            with self.assertRaises(SauceNAOError):
+                self.sauce._execute_search("GET")
 
         self.assertGreater(self.sauce.daily_limit_time, 0)
         sleep.assert_not_called()
+
+    def test_search_raises_on_failure(self):
+        with patch.object(
+            self.sauce,
+            "_execute_search",
+            side_effect=SauceNAOError("boom"),
+        ):
+            with self.assertRaises(SauceNAOError):
+                self.sauce.search_file(b"data")
+
+    def test_get_sources_raises_on_failure(self):
+        with patch.object(
+            self.sauce,
+            "search",
+            side_effect=SauceNAOError("boom"),
+        ):
+            with self.assertRaises(SauceNAOError):
+                self.sauce.get_sources(b"data")
 
     def test_cache_is_per_instance_and_not_shared(self):
         first = SauceNAO("key-1")

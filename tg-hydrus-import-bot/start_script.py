@@ -4,7 +4,7 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
+from functools import partial, wraps
 import html
 import io
 import os
@@ -22,7 +22,7 @@ from loguru import logger
 from config import CONF
 from tools import get_temp_folder, multiline_to_hashtags, split_text
 from hydrus_requests import HydrusRequests
-from saucenao_api import SauceNAO
+from saucenao_api import SauceNAO, SauseNAOException
 from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
     answer_disabled_content, send_content_from_response, get_success_reply_str
 
@@ -112,6 +112,27 @@ async def answer_with_retry(msg: Message, text: str, **kwargs) -> Message | None
 async def answer_long_with_retry(msg: Message, text: str, **kwargs):
     """Отправляет длинный текст несколькими сообщениями."""
     return await answer_with_retry(msg, text, **kwargs)
+
+
+def handle_request_errors(func):
+    """Отвечает пользователю, если Hydrus или Telegram вернули ошибку.
+
+    Без этого обработчик молча падал, и пользователь не получал ответа.
+    """
+    @wraps(func)
+    async def wrapper(msg: Message, *args, **kwargs):
+        try:
+            return await func(msg, *args, **kwargs)
+        except hydrus_api.HydrusAPIException as ex:
+            logger.error(f"Ошибка Hydrus API: {ex}")
+            await answer_with_retry(msg, "Ошибка Hydrus API. Смотри логи.")
+        except exceptions.TelegramBadRequest as ex:
+            logger.error(f"Telegram отклонил ответ: {ex}")
+            await answer_with_retry(
+                msg,
+                "Telegram отклонил ответ. Смотри логи."
+            )
+    return wrapper
 
 
 async def download_with_retry(
@@ -257,10 +278,18 @@ async def start_script():
                 if not content_file:
                     await answer_with_retry(msg, f"{hash_str}: файл не найден")
                     continue
-                urls = await asyncio.to_thread(
-                    sauce_nao.get_sources,
-                    content_file.content
-                )
+                try:
+                    urls = await asyncio.to_thread(
+                        sauce_nao.get_sources,
+                        content_file.content
+                    )
+                except SauseNAOException as ex:
+                    logger.error(f"Ошибка SauceNAO для {hash_str}: {ex}")
+                    await answer_with_retry(
+                        msg,
+                        f"{hash_str}: ошибка SauceNAO ({ex})"
+                    )
+                    continue
                 if not urls:
                     await answer_with_retry(msg, f"{hash_str}: источники не найдены")
                     continue
@@ -360,8 +389,10 @@ async def start_script():
         await answer_with_retry(msg, reply)
 
     @dp.message()
+    @handle_request_errors
     async def message_handler(msg: Message):
         logger.info("Запуск message_handler")
+        sauce_error: str | None = None
         if msg_content := msg.photo:
             if not (msg.photo and "photo" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, "photo")
@@ -380,7 +411,15 @@ async def start_script():
             )
 
             if not (tags or urls) and sauce_nao:
-                urls = await asyncio.to_thread(sauce_nao.get_sources, content_file)
+                try:
+                    urls = await asyncio.to_thread(
+                        sauce_nao.get_sources, content_file
+                    )
+                except SauseNAOException as ex:
+                    logger.error(f"Ошибка SauceNAO: {ex}")
+                    sauce_error = (
+                        "SauceNAO: не удалось выполнить поиск источников."
+                    )
 
             resp = await run_hydrus(
                 hydrus.import_content,
@@ -580,8 +619,10 @@ async def start_script():
             reply = "Неизвестный тип.\n" \
                 "Смотри логи.\n" \
                 f"{msg.message_id}"
+        if sauce_error:
+            reply = f"{reply}\n{sauce_error}"
         logger.info(f"Отправленный ответ: {reply}")
-        await msg.answer(reply, reply_to_message_id=msg.message_id)
+        await answer_with_retry(msg, reply)
 
     await dp.start_polling(bot)
 

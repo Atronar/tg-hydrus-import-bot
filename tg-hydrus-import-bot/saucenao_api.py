@@ -105,6 +105,17 @@ class SauceNaoTooManyRequests(SauseNAOException):
         super().__init__(-2, message, *args)
 
 
+class SauceNAOError(SauseNAOException):
+    """Не удалось выполнить запрос к SauceNAO.
+
+    Отличает сбой (сеть, лимиты, некорректный ответ) от валидного
+    ответа без подходящих результатов: пустой список означает,
+    что поиск прошёл, но ничего не найдено.
+    """
+    def __init__(self, message: str, *args: object):
+        super().__init__(-1, message, *args)
+
+
 class BaseSauceNAO:
     """Базовый класс с общими методами для SauceNAO"""
     API_URL = "https://saucenao.com/search.php"
@@ -292,11 +303,12 @@ class SauceNAO(BaseSauceNAO):
         self,
         method: str,
         **request_args
-    ) -> list[Result] | None:
+    ) -> list[Result]:
         """Выполняет запрос, повторяя только 429/5xx и сетевые ошибки.
 
-        None означает, что запрос не удался; пустой список — валидный
-        ответ без подходящих результатов.
+        Пустой список — валидный ответ без подходящих результатов.
+        При сбое возбуждается SauceNAOError, чтобы вызывающий код мог
+        отличить ошибку от «ничего не найдено».
         """
         for attempt in range(self.MAX_RETRIES):
             try:
@@ -320,7 +332,7 @@ class SauceNAO(BaseSauceNAO):
                         time.sleep(delay)
                         continue
                     logger.error("SauceNAO: исчерпаны повторы после 429")
-                    return None
+                    raise SauceNAOError("исчерпаны повторы после 429")
 
                 if 500 <= response.status_code < 600:
                     if attempt + 1 < self.MAX_RETRIES:
@@ -334,11 +346,13 @@ class SauceNAO(BaseSauceNAO):
                     logger.error(
                         f"SauceNAO: сервер вернул {response.status_code}"
                     )
-                    return None
+                    raise SauceNAOError(
+                        f"сервер вернул {response.status_code}"
+                    )
 
                 if response.status_code == 413:
                     logger.error("SauceNAO: файл слишком большой")
-                    return None
+                    raise SauceNAOError("файл слишком большой")
 
                 response.raise_for_status()
                 return self.resp_handle(self._process_response(response))
@@ -347,7 +361,7 @@ class SauceNAO(BaseSauceNAO):
                 if exc.daily_limit:
                     self.daily_limit_time = time.time()
                     logger.warning(exc.message)
-                    return None
+                    raise SauceNAOError("исчерпан дневной лимит") from exc
                 if attempt + 1 < self.MAX_RETRIES:
                     logger.info(
                         f"SauceNAO: короткий лимит, "
@@ -355,14 +369,16 @@ class SauceNAO(BaseSauceNAO):
                     )
                     time.sleep(self.SHORT_LIMIT_DELAY)
                     continue
-                return None
+                raise SauceNAOError("превышен лимит запросов") from exc
+            except SauceNAOError:
+                raise
             except SauseNAOException as exc:
                 logger.error(f"SauceNAO API error: {exc}")
-                return None
+                raise SauceNAOError(str(exc)) from exc
             except requests.HTTPError as exc:
                 status = exc.response.status_code if exc.response else "?"
                 logger.error(f"SauceNAO HTTP error {status}: {exc}")
-                return None
+                raise SauceNAOError(f"HTTP {status}") from exc
             except requests.RequestException as exc:
                 logger.error(f"SauceNAO request failed: {exc}")
                 if attempt + 1 < self.MAX_RETRIES:
@@ -370,12 +386,12 @@ class SauceNAO(BaseSauceNAO):
                     logger.info(f"Повтор SauceNAO через {delay:.0f} c")
                     time.sleep(delay)
                     continue
-                return None
+                raise SauceNAOError("сетевая ошибка") from exc
             except (TypeError, ValueError, AttributeError, KeyError) as exc:
                 logger.error(f"SauceNAO invalid response: {exc}")
-                return None
+                raise SauceNAOError("некорректный ответ") from exc
 
-        return None
+        raise SauceNAOError("не удалось выполнить запрос")
 
     def _process_response(self, response: requests.Response) -> ResponseJSON:
         """Обработка и валидация ответа"""
@@ -401,15 +417,13 @@ class SauceNAO(BaseSauceNAO):
             if key in self._cache:
                 return self._cache[key]
         if self._handle_rate_limit():
-            return []
+            raise SauceNAOError("исчерпан дневной лимит SauceNAO")
 
         params = self._build_params(url=url)
         results = self._execute_search("GET", params=params)
-        if results is not None:
-            with self._cache_lock:
-                self._cache[key] = results
-            return results
-        return []
+        with self._cache_lock:
+            self._cache[key] = results
+        return results
 
     def search_file(self, file: IOBase|bytes) -> list[Result]:
         """Поиск изображения с помощью сервиса
@@ -424,17 +438,15 @@ class SauceNAO(BaseSauceNAO):
             if key in self._cache:
                 return self._cache[key]
         if self._handle_rate_limit():
-            return []
+            raise SauceNAOError("исчерпан дневной лимит SauceNAO")
 
         params = self._build_params()
         files = {'file': ("image.png", content)}
 
         results = self._execute_search("POST", params=params, files=files)
-        if results is not None:
-            with self._cache_lock:
-                self._cache[key] = results
-            return results
-        return []
+        with self._cache_lock:
+            self._cache[key] = results
+        return results
 
     def get_sources(self, file: str|IOBase|bytes) -> list[str]:
         """Получение списка ссылок-источников для заданного файла

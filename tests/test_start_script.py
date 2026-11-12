@@ -7,6 +7,7 @@ from io import BytesIO
 from unittest.mock import AsyncMock, patch
 
 from aiogram import exceptions
+import hydrus_api
 
 from start_script import (
     MAX_MESSAGE_LENGTH,
@@ -14,6 +15,7 @@ from start_script import (
     answer_with_retry,
     download_with_retry,
     get_telegram_proxy,
+    handle_request_errors,
     make_temp_file_path,
     remove_temp_file,
     run_hydrus,
@@ -194,6 +196,44 @@ class TempFileTests(unittest.TestCase):
         remove_temp_file(path)
         self.assertFalse(os.path.exists(path))
         remove_temp_file(path)  # повторное удаление не должно падать
+
+
+class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hydrus_error_is_reported_to_user(self):
+        @handle_request_errors
+        async def handler(msg):
+            raise hydrus_api.HydrusAPIException("boom")
+
+        msg = FakeMessage(message_id=7)
+        await handler(msg)
+        self.assertEqual(
+            msg.answers,
+            [("Ошибка Hydrus API. Смотри логи.", {"reply_to_message_id": 7})],
+        )
+
+    async def test_telegram_bad_request_is_reported_to_user(self):
+        @handle_request_errors
+        async def handler(msg):
+            raise telegram_exception(exceptions.TelegramBadRequest)
+
+        msg = FakeMessage(message_id=8)
+        await handler(msg)
+        self.assertEqual(
+            msg.answers,
+            [
+                (
+                    "Telegram отклонил ответ. Смотри логи.",
+                    {"reply_to_message_id": 8},
+                )
+            ],
+        )
+
+    async def test_successful_handler_result_is_returned(self):
+        @handle_request_errors
+        async def handler(msg):
+            return "ok"
+
+        self.assertEqual(await handler(FakeMessage()), "ok")
 
 
 class RunHydrusTests(unittest.IsolatedAsyncioTestCase):
