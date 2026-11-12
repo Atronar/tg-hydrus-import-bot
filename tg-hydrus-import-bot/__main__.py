@@ -14,6 +14,7 @@ import urllib3.exceptions
 from start_script import start_script
 from tools import prepare_temp_folder
 from config import CONF
+from hydrus_requests import InsecureApiUrlError
 
 logger.remove()
 logger.add(
@@ -41,6 +42,9 @@ def main():
     prepare_temp_folder()
     try:
         asyncio.run(start_script())
+    except InsecureApiUrlError as ex:
+        logger.critical(f"Небезопасная настройка Hydrus API: {ex}")
+        raise SystemExit(1) from ex
     except hydrus_api.DatabaseLocked as ex:
         if ex.response.status_code==503:
             parsed_url = urllib.parse.urlparse(ex.response.url)

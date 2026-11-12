@@ -234,7 +234,8 @@ async def start_script():
         CONF.HYDRUS_TOKEN,
         api_url=CONF.HYDRUS_API_URL,
         default_tags_namespace=CONF.TAGS_NAMESPACE,
-        default_destination_page_name=CONF.DESTINATION_PAGE_NAME
+        default_destination_page_name=CONF.DESTINATION_PAGE_NAME,
+        allow_insecure_api_url=CONF.ALLOW_INSECURE_HYDRUS
     )
     if CONF.SAUCENAO_TOKEN:
         sauce_nao = SauceNAO(CONF.SAUCENAO_TOKEN)

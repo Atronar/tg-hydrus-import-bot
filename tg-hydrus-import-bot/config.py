@@ -51,6 +51,7 @@ class ConfigModel(BaseModel):
         )
     ]
     HYDRUS_API_URL: str
+    ALLOW_INSECURE_HYDRUS: bool = False
     TIME_TO_SLEEP: Annotated[float, Field(gt=0)]
     TAGS_NAMESPACE: str
     DESTINATION_PAGE_NAME: str

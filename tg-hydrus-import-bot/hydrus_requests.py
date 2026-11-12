@@ -19,6 +19,10 @@ HYDRUS_TIMEOUT = (5.0, 60.0)
 """Таймаут (подключение, чтение) для запросов к Hydrus API."""
 
 
+class InsecureApiUrlError(ValueError):
+    """HYDRUS_API_URL передаёт токен Hydrus по незашифрованному HTTP."""
+
+
 class _TimeoutSession(requests.Session):
     """Сессия requests с таймаутом по умолчанию.
 
@@ -78,8 +82,10 @@ class HydrusRequests:
             *,
             api_url: str|None = None,
             default_tags_namespace: str|None = None,
-            default_destination_page_name: str|None = None
+            default_destination_page_name: str|None = None,
+            allow_insecure_api_url: bool = False
         ):
+        self.allow_insecure_api_url = allow_insecure_api_url
         self.set_client(hydrus, api_url=api_url)
         self.set_default_tags_namespace(default_tags_namespace)
         self.set_default_destination_page_name(default_destination_page_name)
@@ -106,16 +112,31 @@ class HydrusRequests:
             return False
 
     @classmethod
-    def _warn_if_insecure_api_url(cls, api_url: str|None) -> None:
-        """Предупреждает о передаче токена Hydrus по незашифрованному HTTP."""
+    def _warn_if_insecure_api_url(
+        cls,
+        api_url: str|None,
+        *,
+        allow_insecure: bool = False
+    ) -> None:
+        """Проверяет, что токен Hydrus не передаётся по HTTP в сеть.
+
+        По умолчанию небезопасное подключение запрещено. Явное разрешение
+        (ALLOW_INSECURE_HYDRUS=true) оставляет только предупреждение.
+        """
         if not api_url:
             return
         parsed = urlparse(api_url)
-        if parsed.scheme == "http" and not cls._is_loopback_host(parsed.hostname or ""):
-            logger.warning(
-                "HYDRUS_API_URL использует HTTP: токен Hydrus передаётся "
-                "по сети без шифрования. Используйте HTTPS или localhost."
-            )
+        if parsed.scheme != "http" or cls._is_loopback_host(parsed.hostname or ""):
+            return
+        message = (
+            "HYDRUS_API_URL использует HTTP: токен Hydrus передаётся "
+            "по сети без шифрования. Используйте HTTPS или localhost. "
+            "Если риск осознан, установите ALLOW_INSECURE_HYDRUS=true."
+        )
+        if allow_insecure:
+            logger.warning(message)
+            return
+        raise InsecureApiUrlError(message)
 
     def set_client(self, hydrus: hydrus_api.Client|str, *, api_url: str|None = None):
         """Установка значения клиента
@@ -141,7 +162,8 @@ class HydrusRequests:
         else:
             self.client = hydrus
         self._warn_if_insecure_api_url(
-            getattr(self.client, "api_url", None) or api_url
+            getattr(self.client, "api_url", None) or api_url,
+            allow_insecure=self.allow_insecure_api_url
         )
 
     def set_default_tags_namespace(self, tags_namespace: str|None):

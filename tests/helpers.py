@@ -187,6 +187,7 @@ def make_hydrus(permissions, client: FakeHydrusClient | None = None):
     obj.permissions = set(permissions)
     obj.default_tags_namespace = "test tags"
     obj.destination_page_name = "test page"
+    obj.allow_insecure_api_url = False
     obj._tags_namespace_cache = TTLCache(maxsize=32, ttl=3600)
     obj._pages_cache = TTLCache(maxsize=1, ttl=60)
     return obj

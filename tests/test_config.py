@@ -53,6 +53,16 @@ class ConfigModelTests(unittest.TestCase):
         )
         self.assertEqual(config.TG_PROXY, "http://127.0.0.1:8118")
 
+    def test_insecure_hydrus_defaults_to_false(self):
+        config = ConfigModel(**TEST_CONFIG)
+        self.assertFalse(config.ALLOW_INSECURE_HYDRUS)
+
+    def test_insecure_hydrus_can_be_enabled(self):
+        config = ConfigModel(
+            **{**TEST_CONFIG, "ALLOW_INSECURE_HYDRUS": True}
+        )
+        self.assertTrue(config.ALLOW_INSECURE_HYDRUS)
+
 
 class PathExpansionTests(unittest.TestCase):
     def test_percent_environment_variable_is_expanded(self):

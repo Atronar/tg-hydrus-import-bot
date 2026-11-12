@@ -11,6 +11,7 @@ from hydrus_api_enums import HydrusPermission
 from hydrus_requests import (
     HYDRUS_TIMEOUT,
     HydrusRequests,
+    InsecureApiUrlError,
     _TimeoutSession,
 )
 from tests.helpers import FakeHydrusClient, make_hydrus
@@ -523,30 +524,58 @@ class CacheTests(unittest.TestCase):
 
 
 class InsecureApiUrlTests(unittest.TestCase):
-    def test_warns_for_remote_http(self):
+    def test_remote_http_raises_by_default(self):
+        with patch("hydrus_requests.logger.warning") as warning:
+            with self.assertRaises(InsecureApiUrlError):
+                HydrusRequests._warn_if_insecure_api_url(
+                    "http://hydrus.example.com:45869"
+                )
+        warning.assert_not_called()
+
+    def test_remote_http_allowed_with_explicit_flag(self):
         with patch("hydrus_requests.logger.warning") as warning:
             HydrusRequests._warn_if_insecure_api_url(
-                "http://hydrus.example.com:45869"
+                "http://hydrus.example.com:45869",
+                allow_insecure=True,
             )
         warning.assert_called_once()
 
-    def test_does_not_warn_for_loopback_http(self):
+    def test_loopback_and_https_are_allowed(self):
         for url in (
             "http://127.0.0.1:45869",
             "http://localhost:45869",
             "http://[::1]:45869",
+            "https://hydrus.example.com:45869",
         ):
-            with self.subTest(url=url):
-                with patch("hydrus_requests.logger.warning") as warning:
-                    HydrusRequests._warn_if_insecure_api_url(url)
-                warning.assert_not_called()
+            for allow_insecure in (False, True):
+                with self.subTest(url=url, allow_insecure=allow_insecure):
+                    with patch("hydrus_requests.logger.warning") as warning:
+                        HydrusRequests._warn_if_insecure_api_url(
+                            url,
+                            allow_insecure=allow_insecure,
+                        )
+                    warning.assert_not_called()
 
-    def test_does_not_warn_for_https(self):
+    @patch("hydrus_requests.hydrus_api.Client")
+    def test_constructor_rejects_remote_http(self, client_class):
+        client_class.return_value.api_url = "http://hydrus.example.com:45869"
+        with self.assertRaises(InsecureApiUrlError):
+            HydrusRequests("a" * 64)
+        client_class.return_value.verify_access_key.assert_not_called()
+
+    @patch("hydrus_requests.hydrus_api.Client")
+    def test_constructor_allows_remote_http_when_enabled(self, client_class):
+        client_class.return_value.api_url = "http://hydrus.example.com:45869"
+        client_class.return_value.verify_access_key.return_value = {
+            "basic_permissions": []
+        }
         with patch("hydrus_requests.logger.warning") as warning:
-            HydrusRequests._warn_if_insecure_api_url(
-                "https://hydrus.example.com:45869"
+            hydrus = HydrusRequests(
+                "a" * 64,
+                allow_insecure_api_url=True,
             )
-        warning.assert_not_called()
+        warning.assert_called_once()
+        self.assertEqual(hydrus.permissions, set())
 
 
 class ConvertResponseTests(unittest.TestCase):

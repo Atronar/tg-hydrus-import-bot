@@ -6,6 +6,7 @@
   "TG_PROXY": "",
   "HYDRUS_TOKEN": "00af00af00af00af00af00af00af00af00af00af00af00af00af00af00af00af",
   "HYDRUS_API_URL": "http://127.0.0.1:45869/",
+  "ALLOW_INSECURE_HYDRUS": false,
   "TIME_TO_SLEEP": 120,
   "TAGS_NAMESPACE": "my tags",
   "DESTINATION_PAGE_NAME": "HC",

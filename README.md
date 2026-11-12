@@ -35,6 +35,7 @@
 * `TG_PROXY`: прокси для Telegram Bot API, например `http://127.0.0.1:8118` или `socks5://127.0.0.1:1080`. Если пусто, бот использует `HTTPS_PROXY`/`ALL_PROXY`, а затем системный прокси Windows
 * `HYDRUS_TOKEN`: токен Hydrus API, берётся в клиенте: services -> review services -> local -> client api -> add
 * `HYDRUS_API_URL`: адрес Hydrus API, по умолчанию `http://127.0.0.1:45869/`
+* `ALLOW_INSECURE_HYDRUS`: разрешить HTTP к Hydrus не на localhost. По умолчанию `false`: токен Hydrus не должен передаваться по сети без шифрования
 * `TIME_TO_SLEEP`: время в секундах, которое ожидает программа в случае сбоя
 * `TAGS_NAMESPACE`: пространство тегов Гидруса, в которое эти теги и записываются
 * `DESTINATION_PAGE_NAME`: название страницы в клиенте Гидруса, на которую отправляются импортированные файлы
