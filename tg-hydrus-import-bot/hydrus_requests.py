@@ -633,7 +633,9 @@ class HydrusRequests:
         -------
         str | None
             Хэш файла, как он хранится в системе, либо None, если файл отсутствует
-            или недоступны связи файлов
+            или недоступны связи файлов.
+            Если king недоступен локально, возвращается сам файл — так рекомендует
+            документация Hydrus, поскольку скачать нелокальный king нельзя.
         """
         if not self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT):
             logger.warning('Отсутствует доступ "manage file relationships"')
@@ -649,9 +651,12 @@ class HydrusRequests:
         relationship = file_relationships.get("file_relationships", {}).get(file_hash)
         if not relationship:
             return None
-        if relationship.get("is_king", True) and not relationship.get("king_is_on_file_domain", False):
-            return None
-        return relationship.get("king", file_hash)
+        # king_is_local означает, что king лежит на диске и его можно скачать
+        # через /get_files/file. Если его нет локально, представителем группы
+        # остаётся сам файл.
+        if relationship.get("king_is_local", False):
+            return relationship.get("king", file_hash)
+        return file_hash
 
     def get_file(self, file_hash: str):
         """Получение файла по хэшу
@@ -664,21 +669,25 @@ class HydrusRequests:
         Returns
         -------
         Response | None
-            http-ответ, содержащий сам файл
+            http-ответ, содержащий сам файл.
+            Требует права "search and fetch files" и "manage file relationships":
+            без второго нельзя определить king, поэтому исходный хэш не подставляется.
             Подробнее: https://hydrusnetwork.github.io/hydrus/developer_api.html#get_files_file
         """
         # Проверка доступа и хэша
         if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH):
             logger.warning('Отсутствует доступ "search and fetch files"')
             return None
+        if not self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT):
+            logger.warning('Отсутствует доступ "manage file relationships"')
+            return None
         if not file_hash:
             return None
-        if (
-            self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT)
-            and (main_file_hash := self.get_main_file_hash(file_hash))
-        ):
-            file_hash = main_file_hash
-        return self.client.get_file(hash_=file_hash)
+        # Без возможности определить king поведение не подменяется исходным хэшем:
+        # отсутствие права делает функцию невыполнимой.
+        if not (main_file_hash := self.get_main_file_hash(file_hash)):
+            return None
+        return self.client.get_file(hash_=main_file_hash)
 
     def get_tags(
         self,
@@ -704,22 +713,27 @@ class HydrusRequests:
         Returns
         -------
         list[str]
-            Список текущих тегов указанного пространства
+            Список текущих тегов указанного пространства.
+            Требует права "search and fetch files" и "manage file relationships":
+            без второго нельзя определить king, поэтому теги исходного хэша
+            не подставляются.
         """
         if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH):
             logger.warning('Отсутствует доступ "search and fetch files"')
             return []
+        if not self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT):
+            logger.warning('Отсутствует доступ "manage file relationships"')
+            return []
         if not file_hash:
             return []
-        if (
-            self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT)
-            and (main_file_hash := self.get_main_file_hash(file_hash))
-        ):
-            file_hash = main_file_hash
+        # Теги дубликата берутся у king. Без права на relationships
+        # определить king нельзя, поэтому подменять его исходным хэшем нельзя.
+        if not (main_file_hash := self.get_main_file_hash(file_hash)):
+            return []
         file_metadata = (
             self
             .client
-            .get_file_metadata(hashes=[file_hash,])
+            .get_file_metadata(hashes=[main_file_hash,])
             .get('metadata', [])
         )
         if not file_metadata:

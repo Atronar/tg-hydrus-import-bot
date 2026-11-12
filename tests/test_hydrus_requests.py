@@ -26,7 +26,7 @@ class MainFileHashTests(unittest.TestCase):
         client.relationships["original"] = {
             "is_king": False,
             "king": "king",
-            "king_is_on_file_domain": True,
+            "king_is_local": True,
         }
         hydrus = make_hydrus({HydrusPermission.RELATIONSHIPS_EDIT}, client)
         self.assertEqual(hydrus.get_main_file_hash("original"), "king")
@@ -36,20 +36,22 @@ class MainFileHashTests(unittest.TestCase):
         client.relationships["king"] = {
             "is_king": True,
             "king": "king",
-            "king_is_on_file_domain": True,
+            "king_is_local": True,
         }
         hydrus = make_hydrus({HydrusPermission.RELATIONSHIPS_EDIT}, client)
         self.assertEqual(hydrus.get_main_file_hash("king"), "king")
 
-    def test_returns_none_when_king_is_not_on_file_domain(self):
+    def test_returns_file_itself_when_king_is_not_local(self):
+        # Документация Hydrus: если king недоступен локально,
+        # представителем группы остаётся сам файл.
         client = FakeHydrusClient()
         client.relationships["original"] = {
-            "is_king": True,
+            "is_king": False,
             "king": "king",
-            "king_is_on_file_domain": False,
+            "king_is_local": False,
         }
         hydrus = make_hydrus({HydrusPermission.RELATIONSHIPS_EDIT}, client)
-        self.assertIsNone(hydrus.get_main_file_hash("original"))
+        self.assertEqual(hydrus.get_main_file_hash("original"), "original")
 
     def test_returns_none_for_unknown_file(self):
         hydrus = make_hydrus({HydrusPermission.RELATIONSHIPS_EDIT})
@@ -60,7 +62,7 @@ class MainFileHashTests(unittest.TestCase):
         client.relationships["abc"] = {
             "is_king": True,
             "king": "abc",
-            "king_is_on_file_domain": True,
+            "king_is_local": True,
         }
         hydrus = make_hydrus({HydrusPermission.RELATIONSHIPS_EDIT}, client)
         self.assertEqual(hydrus.get_main_file_hash("sha256:abc"), "abc")
@@ -79,7 +81,7 @@ class GetFileTests(unittest.TestCase):
         client.relationships["original"] = {
             "is_king": False,
             "king": "king",
-            "king_is_on_file_domain": True,
+            "king_is_local": True,
         }
         hydrus = make_hydrus(
             {HydrusPermission.FILES_SEARCH_FETCH, HydrusPermission.RELATIONSHIPS_EDIT},
@@ -88,11 +90,25 @@ class GetFileTests(unittest.TestCase):
         self.assertIs(hydrus.get_file("original"), client.file_response)
         self.assertEqual(client.calls[-1], ("get_file", "king"))
 
-    def test_uses_original_hash_without_relationships_permission(self):
+    def test_uses_original_when_king_is_not_local(self):
         client = FakeHydrusClient()
-        hydrus = make_hydrus({HydrusPermission.FILES_SEARCH_FETCH}, client)
+        client.relationships["original"] = {
+            "is_king": False,
+            "king": "king",
+            "king_is_local": False,
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH, HydrusPermission.RELATIONSHIPS_EDIT},
+            client,
+        )
         self.assertIs(hydrus.get_file("original"), client.file_response)
         self.assertEqual(client.calls[-1], ("get_file", "original"))
+
+    def test_without_relationships_permission_returns_none(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus({HydrusPermission.FILES_SEARCH_FETCH}, client)
+        self.assertIsNone(hydrus.get_file("original"))
+        self.assertEqual(client.calls, [])
 
     def test_without_search_permission_returns_none(self):
         client = FakeHydrusClient()
@@ -102,7 +118,10 @@ class GetFileTests(unittest.TestCase):
 
     def test_empty_hash_returns_none(self):
         client = FakeHydrusClient()
-        hydrus = make_hydrus({HydrusPermission.FILES_SEARCH_FETCH}, client)
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH, HydrusPermission.RELATIONSHIPS_EDIT},
+            client,
+        )
         self.assertIsNone(hydrus.get_file(""))
 
 
@@ -112,7 +131,7 @@ class GetTagsTests(unittest.TestCase):
         self.client.relationships["original"] = {
             "is_king": False,
             "king": "king",
-            "king_is_on_file_domain": True,
+            "king_is_local": True,
         }
         self.client.metadata["king"] = {
             "tags": {
@@ -149,10 +168,10 @@ class GetTagsTests(unittest.TestCase):
             ["stored", "tags"],
         )
 
-    def test_uses_original_without_relationships_permission(self):
+    def test_without_relationships_permission_returns_empty(self):
         hydrus = make_hydrus({HydrusPermission.FILES_SEARCH_FETCH}, self.client)
-        self.assertEqual(hydrus.get_tags("original"), ["original"])
-        self.assertIn(("get_file_metadata", ["original"]), self.client.calls)
+        self.assertEqual(hydrus.get_tags("original"), [])
+        self.assertEqual(self.client.calls, [])
 
     def test_returns_empty_without_search_permission(self):
         hydrus = make_hydrus({HydrusPermission.RELATIONSHIPS_EDIT}, self.client)
@@ -160,12 +179,23 @@ class GetTagsTests(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_returns_empty_for_missing_metadata(self):
-        hydrus = make_hydrus({HydrusPermission.FILES_SEARCH_FETCH}, self.client)
+        self.client.relationships["unknown"] = {
+            "is_king": True,
+            "king": "unknown",
+            "king_is_local": True,
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH, HydrusPermission.RELATIONSHIPS_EDIT},
+            self.client,
+        )
         self.assertEqual(hydrus.get_tags("unknown"), [])
 
     def test_returns_empty_for_unknown_namespace(self):
         self.client.service_keys["unknown namespace"] = "unknown_service_key"
-        hydrus = make_hydrus({HydrusPermission.FILES_SEARCH_FETCH}, self.client)
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH, HydrusPermission.RELATIONSHIPS_EDIT},
+            self.client,
+        )
         self.assertEqual(
             hydrus.get_tags("original", tags_namespace="unknown namespace"),
             [],
