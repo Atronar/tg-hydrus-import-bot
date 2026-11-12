@@ -1,10 +1,13 @@
 """Тесты обработки сообщений Telegram и отправки контента."""
 
 import os
+import shutil
+import subprocess
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from aiogram.types import MessageEntity
 from PIL import Image
@@ -15,6 +18,7 @@ from tg_parse_requests import (
     _FFMPEG_EXECUTOR,
     _async_convert,
     _convert_video_to_mp4,
+    _is_mp4,
     _resize_image,
     _stream_content,
     answer_disabled_content,
@@ -196,9 +200,55 @@ class AsyncConvertTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MediaTests(unittest.TestCase):
+    @staticmethod
+    def _make_video(container: str) -> bytes:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise unittest.SkipTest("ffmpeg не найден")
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel", "error",
+                "-f", "lavfi",
+                "-i", "color=c=black:s=16x16:d=0.2",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "frag_keyframe+empty_moov",
+                "-f", container,
+                "pipe:1",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        return result.stdout
+
     def test_mp4_passthrough_does_not_call_ffmpeg(self):
-        content = b"small mp4"
-        self.assertIs(_convert_video_to_mp4(content, "video/mp4"), content)
+        # Сигнатура ftyp в начале контейнера — валидный MP4
+        content = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 8
+        self.assertTrue(_is_mp4(content))
+        with patch("tg_parse_requests.get_io_mp4") as convert:
+            self.assertIs(_convert_video_to_mp4(content), content)
+        convert.assert_not_called()
+
+    def test_ffmpeg_detects_input_format_from_bytes(self):
+        content = self._make_video("matroska")
+        self.assertFalse(_is_mp4(content))
+        converted = _convert_video_to_mp4(content)
+        self.assertIsNotNone(converted)
+        self.assertTrue(_is_mp4(converted))
+
+    def test_falls_back_when_first_codec_is_unavailable(self):
+        with patch(
+            "tg_parse_requests.get_io_mp4",
+            side_effect=[RuntimeError("no gpu"), b"\x00\x00\x00\x18ftypisom"],
+        ) as convert:
+            converted = _convert_video_to_mp4(b"not an mp4")
+        self.assertEqual(converted, b"\x00\x00\x00\x18ftypisom")
+        self.assertEqual(convert.call_count, 2)
+        self.assertEqual(convert.call_args_list[0].kwargs["output_codec"], "x265-gpu")
+        self.assertEqual(convert.call_args_list[1].kwargs["output_codec"], "x264-fast")
 
     def test_resize_image_returns_small_image_unchanged(self):
         content = b"small"

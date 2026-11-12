@@ -101,20 +101,29 @@ async def _async_convert(func: Callable, *args) -> bytes | None:
         logger.error(f"Ошибка конвертации {func.__name__}: {e}")
         return None
 
-def _convert_video_to_mp4(content: bytes, mime_type: str) -> bytes|None:
-    """Конвертирует видео с приоритетом скорости."""
-    input_format = mime_type.split("/", 1)[-1].lower()
-    # Если уже MP4, проверяем только размер
-    if input_format == "mp4" and len(content) <= MAX_FILE_SIZE:
+def _is_mp4(content: bytes) -> bool:
+    """Проверяет контейнер MP4 по сигнатуре ftyp, не доверяя MIME-типу."""
+    return len(content) >= 12 and content[4:8] == b"ftyp"
+
+def _convert_video_to_mp4(content: bytes) -> bytes|None:
+    """Конвертирует видео с приоритетом скорости.
+
+    Формат входного потока определяет сам ffmpeg по байтам: MIME-тип
+    от Telegram не всегда совпадает с demuxer'ом ffmpeg.
+    """
+    # Уже MP4 допустимого размера — перекодирование только ухудшит качество
+    if _is_mp4(content) and len(content) <= MAX_FILE_SIZE:
         return content
 
-    for output_codec in ("x264", "x265-gpu", "x265"):
-        converted = get_io_mp4(
-            content,
-            input_format=input_format,
-            output_codec=output_codec
-        )
-        if len(converted) <= MAX_FILE_SIZE:
+    # Сначала самый быстрый вариант, затем более медленные fallback'и.
+    # GPU-энкодер может отсутствовать — тогда просто переходим к следующему.
+    for output_codec in ("x265-gpu", "x264-fast", "x264", "x265"):
+        try:
+            converted = get_io_mp4(content, output_codec=output_codec)
+        except Exception as ex:
+            logger.warning(f"FFmpeg {output_codec} недоступен: {ex}")
+            continue
+        if converted and len(converted) <= MAX_FILE_SIZE:
             return converted
     return None  # Возврат None при ошибке
 
@@ -200,14 +209,14 @@ async def send_content_from_response(
 
     if content_type.startswith("video/",):
         # mp4 правильного размера не конвертируются, а отдаются обратно
-        if (mp4_content := await _async_convert(_convert_video_to_mp4, content, content_type)):
+        if (mp4_content := await _async_convert(_convert_video_to_mp4, content)):
             answer_function = msg.answer_video
             answer_kwargs["supports_streaming"] = True
             content = mp4_content
         else:
             answer_function = msg.answer_document
     elif content_type in ("image/gif",):
-        if (mp4_content := await _async_convert(_convert_video_to_mp4, content, content_type)):
+        if (mp4_content := await _async_convert(_convert_video_to_mp4, content)):
             content = mp4_content
         answer_function = msg.answer_animation
     elif content_type.startswith("image/"):
