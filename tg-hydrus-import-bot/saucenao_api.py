@@ -1,5 +1,6 @@
 ﻿import hashlib
 from io import BytesIO, IOBase
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -9,6 +10,14 @@ import urllib.parse
 import cachetools
 from loguru import logger
 import requests
+
+
+_SECRET_PATTERN = re.compile(r"(api_key=)[^&\s\"']+", re.IGNORECASE)
+
+
+def _redact_secrets(text: str) -> str:
+    """Скрывает API-ключ в тексте исключений и логов."""
+    return _SECRET_PATTERN.sub(r"\1***", text)
 
 
 class HeaderIndex(TypedDict):
@@ -360,7 +369,7 @@ class SauceNAO(BaseSauceNAO):
             except SauceNaoTooManyRequests as exc:
                 if exc.daily_limit:
                     self.daily_limit_time = time.time()
-                    logger.warning(exc.message)
+                    logger.warning(_redact_secrets(exc.message))
                     raise SauceNAOError("исчерпан дневной лимит") from exc
                 if attempt + 1 < self.MAX_RETRIES:
                     logger.info(
@@ -373,14 +382,19 @@ class SauceNAO(BaseSauceNAO):
             except SauceNAOError:
                 raise
             except SauseNAOException as exc:
-                logger.error(f"SauceNAO API error: {exc}")
-                raise SauceNAOError(str(exc)) from exc
+                message = _redact_secrets(str(exc))
+                logger.error(f"SauceNAO API error: {message}")
+                raise SauceNAOError(message) from exc
             except requests.HTTPError as exc:
                 status = exc.response.status_code if exc.response else "?"
-                logger.error(f"SauceNAO HTTP error {status}: {exc}")
+                logger.error(
+                    f"SauceNAO HTTP error {status}: {_redact_secrets(str(exc))}"
+                )
                 raise SauceNAOError(f"HTTP {status}") from exc
             except requests.RequestException as exc:
-                logger.error(f"SauceNAO request failed: {exc}")
+                logger.error(
+                    f"SauceNAO request failed: {_redact_secrets(str(exc))}"
+                )
                 if attempt + 1 < self.MAX_RETRIES:
                     delay = self._backoff(attempt)
                     logger.info(f"Повтор SauceNAO через {delay:.0f} c")
@@ -388,7 +402,9 @@ class SauceNAO(BaseSauceNAO):
                     continue
                 raise SauceNAOError("сетевая ошибка") from exc
             except (TypeError, ValueError, AttributeError, KeyError) as exc:
-                logger.error(f"SauceNAO invalid response: {exc}")
+                logger.error(
+                    f"SauceNAO invalid response: {_redact_secrets(str(exc))}"
+                )
                 raise SauceNAOError("некорректный ответ") from exc
 
         raise SauceNAOError("не удалось выполнить запрос")

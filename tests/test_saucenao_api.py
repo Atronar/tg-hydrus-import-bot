@@ -5,12 +5,14 @@ from io import BytesIO
 from unittest.mock import Mock, patch
 
 import requests
+from loguru import logger
 
 from saucenao_api import (
     SauceNAO,
     SauceNAOError,
     SauceNaoTooManyRequests,
     SauseNAOException,
+    _redact_secrets,
 )
 
 
@@ -289,6 +291,46 @@ class RequestRetryTests(unittest.TestCase):
         ) as execute:
             second.search_file(b"data")
         self.assertEqual(execute.call_count, 1)
+
+
+class SecretRedactionTests(unittest.TestCase):
+    def test_redacts_api_key_in_url(self):
+        text = (
+            "GET https://saucenao.com/search.php"
+            "?output_type=2&api_key=deadbeef&db=999"
+        )
+        redacted = _redact_secrets(text)
+        self.assertNotIn("deadbeef", redacted)
+        self.assertIn("api_key=***", redacted)
+        self.assertIn("db=999", redacted)
+
+    def test_request_error_log_does_not_contain_key(self):
+        sauce = SauceNAO("secret-key")
+        messages: list[str] = []
+        sink = logger.add(
+            lambda message: messages.append(message.record["message"]),
+            level="DEBUG",
+        )
+        try:
+            with (
+                patch.object(
+                    sauce.session,
+                    "request",
+                    side_effect=requests.ConnectionError(
+                        "failed: https://saucenao.com/search.php"
+                        "?api_key=secret-key&db=999"
+                    ),
+                ),
+                patch("saucenao_api.time.sleep"),
+            ):
+                with self.assertRaises(SauceNAOError):
+                    sauce._execute_search("GET")
+        finally:
+            logger.remove(sink)
+
+        output = "\n".join(messages)
+        self.assertNotIn("secret-key", output)
+        self.assertIn("api_key=***", output)
 
 
 if __name__ == "__main__":
