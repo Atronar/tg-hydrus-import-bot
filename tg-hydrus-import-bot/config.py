@@ -59,16 +59,21 @@ if not Path(__CONFPATH).exists():
     print("Создан новый конфиг. Заполните его и перезапустите бота!")
     sys.exit(0)
 
+_ENV_OVERRIDES = ("TG_BOT_TOKEN", "HYDRUS_TOKEN", "SAUCENAO_TOKEN")
+
+def load_config(path: str|Path = __CONFPATH) -> ConfigModel:
+    """Загружает конфиг и применяет переменные окружения до валидации."""
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    for name in _ENV_OVERRIDES:
+        if name in os.environ:
+            data[name] = os.environ[name]
+    return ConfigModel(**data)
+
 # Load configuration at runtime
 try:
-    with open(__CONFPATH, "r", encoding="utf-8") as f:
-        CONF = ConfigModel(**json.load(f))
-        """ Global configuration variable """
-        CONF = CONF.model_copy(update={
-            "TG_BOT_TOKEN": os.getenv("TG_BOT_TOKEN", CONF.TG_BOT_TOKEN),
-            "HYDRUS_TOKEN": os.getenv("HYDRUS_TOKEN", CONF.HYDRUS_TOKEN),
-            "SAUCENAO_TOKEN": os.getenv("SAUCENAO_TOKEN", CONF.SAUCENAO_TOKEN)
-        })
+    CONF = load_config()
+    """ Global configuration variable """
 except ValidationError as e:
     errors = "\n".join([f"- {err['loc'][0]}: {err['msg']}" for err in e.errors()])
     print(f"Ошибки в конфиге:\n{errors}")

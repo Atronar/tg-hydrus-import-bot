@@ -1,10 +1,15 @@
 """Тесты модели конфигурации."""
 
+import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from config import ConfigModel
+from config import ConfigModel, load_config
 from tests import TEST_CONFIG
 
 
@@ -47,6 +52,30 @@ class ConfigModelTests(unittest.TestCase):
             **{**TEST_CONFIG, "TG_PROXY": "  http://127.0.0.1:8118  "}
         )
         self.assertEqual(config.TG_PROXY, "http://127.0.0.1:8118")
+
+
+class LoadConfigTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.path = Path(self.temp_dir.name) / "config.json"
+        self.path.write_text(
+            json.dumps(TEST_CONFIG),
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_env_override_is_validated(self):
+        with patch.dict(os.environ, {"TG_BOT_TOKEN": "invalid"}):
+            with self.assertRaises(ValidationError):
+                load_config(self.path)
+
+    def test_valid_env_override_is_applied(self):
+        token = "999999:" + "B" * 35
+        with patch.dict(os.environ, {"TG_BOT_TOKEN": token}):
+            config = load_config(self.path)
+        self.assertEqual(config.TG_BOT_TOKEN, token)
 
 
 if __name__ == "__main__":
