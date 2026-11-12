@@ -1,6 +1,7 @@
 ﻿import subprocess
 from typing import Literal, cast
 import ffmpy
+from loguru import logger
 from config import CONF
 
 OutPresetName = Literal["x264-fast", "x264", "x265", "x265-gpu"]
@@ -24,9 +25,27 @@ _FFMPEG_LOGLEVELS = {
     "CRITICAL": "fatal",
 }
 
+# Числовые значения стандартных уровней loguru (5, 10, 20, 25, 30, 40, 50)
+_FFMPEG_INT_LOGLEVELS = {
+    logger.level(name).no: ffmpeg_level
+    for name, ffmpeg_level in _FFMPEG_LOGLEVELS.items()
+}
+
+
+def _ffmpeg_loglevel(level: int|str) -> str:
+    """Переводит уровень логирования loguru в уровень ffmpeg.
+
+    Конфиг допускает как имена уровней, так и числа. Неизвестный
+    уровень заменяется на info, чтобы импорт модуля не падал.
+    """
+    if isinstance(level, str):
+        return _FFMPEG_LOGLEVELS.get(level, "info")
+    return _FFMPEG_INT_LOGLEVELS.get(level, "info")
+
+
 _FFMPEG_GLOBAL_OPTIONS = [
     "-hide_banner",     # Не выводить баннер
-    f"-loglevel {_FFMPEG_LOGLEVELS[CONF.LOG_LEVEL]}",  # Не выводить лог
+    f"-loglevel {_ffmpeg_loglevel(CONF.LOG_LEVEL)}",  # Не выводить лог
     "-nostdin",         # Не ждать ввода
     "-y",               # Перезапись без подтверждения
     "-nostats",         # Не выводить прогресс
