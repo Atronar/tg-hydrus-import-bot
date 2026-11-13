@@ -1315,7 +1315,10 @@ class FindUrlDuplicatesTests(unittest.TestCase):
         self.client.relationships = {
             "candidate": {"king": "existing", "king_is_local": True}
         }
-        self.client.metadata = {"existing": {"is_local": True}}
+        self.client.metadata = {
+            "new": {"is_local": True, "mime": "image/png"},
+            "existing": {"is_local": True},
+        }
 
         self.assertEqual(
             self.hydrus.find_url_duplicates("new", 5),
@@ -1328,7 +1331,10 @@ class FindUrlDuplicatesTests(unittest.TestCase):
             "perceptual_hashes": ["p"],
         }
         self.client.relationships = {}
-        self.client.metadata = {"candidate": {"is_local": True}}
+        self.client.metadata = {
+            "new": {"is_local": True, "mime": "image/png"},
+            "candidate": {"is_local": True},
+        }
 
         with patch.object(
             self.hydrus,
@@ -1342,8 +1348,19 @@ class FindUrlDuplicatesTests(unittest.TestCase):
 
     def test_without_perceptual_hashes_returns_none(self):
         self.client.generated_hashes = {"hash": "new"}
+        self.client.metadata = {
+            "new": {"is_local": True, "mime": "image/png"},
+        }
 
         self.assertIsNone(self.hydrus.find_url_duplicates("new", 5))
+
+    def test_non_image_is_not_checked(self):
+        self.client.metadata = {
+            "new": {"is_local": True, "mime": "video/mp4"},
+        }
+
+        self.assertIsNone(self.hydrus.find_url_duplicates("new", 5))
+        self.assertNotIn(("get_file", "new"), self.client.calls)
 
 
 class ResolveUrlDuplicateTests(unittest.TestCase):

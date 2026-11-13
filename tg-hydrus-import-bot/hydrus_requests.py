@@ -1131,6 +1131,13 @@ class HydrusRequests:
         затем — расстояние до ``max_distance``. Возвращает словарь
         ``{"distance": int, "hashes": list[str]}`` или None.
         """
+        # Перцептивные дубликаты имеют смысл только для изображений.
+        # Видео и документы не скачиваем целиком ради проверки.
+        info = self.get_file_info(new_hash)
+        mime = str((info or {}).get("mime") or "")
+        if not mime.startswith("image/"):
+            return None
+
         hashes = self.get_file_hashes(new_hash)
         if not hashes:
             return None
