@@ -1,6 +1,7 @@
 ﻿"""
 Модуль связанный с запросами к Гидрусу
 """
+import io
 import ipaddress
 import os
 import tempfile
@@ -11,6 +12,7 @@ from cachetools import TTLCache
 import hydrus_api
 from loguru import logger
 import requests
+from duplicates import is_priority_url
 from hydrus_api_enums import (
     AddedFileStatus,
     DuplicateRelationship,
@@ -869,6 +871,31 @@ class HydrusRequests:
             return None
         return self.client.get_file(hash_=file_hash)
 
+    def get_file_hashes(
+        self,
+        file_hash: str
+    ) -> hydrus_api_typing.FileHashes | None:
+        """Считает хэши файла, уже загруженного в Hydrus.
+
+        Содержимое скачивается по точному хэшу (без подмены king), чтобы
+        проверить именно новый файл. Возвращает None, если файл недоступен.
+        """
+        response = self.get_file_bytes(file_hash)
+        if not response:
+            return None
+        try:
+            content = getattr(response, "content", None)
+            if content is None:
+                content = response.read()
+            return self.generate_hashes(io.BytesIO(content))
+        except hydrus_api.HydrusAPIException as ex:
+            logger.warning(f"Не удалось получить хэши {file_hash}: {ex}")
+            return None
+        finally:
+            close = getattr(response, "close", None)
+            if close:
+                close()
+
     def get_tags(
         self,
         file_hash: str,
@@ -1006,6 +1033,137 @@ class HydrusRequests:
                     "note": "точный дубликат уже есть в базе",
                 }
         return None
+
+    def find_url_duplicates(
+        self,
+        new_hash: str,
+        max_distance: int
+    ) -> dict[str, object] | None:
+        """Ищет похожие файлы для только что импортированной ссылки.
+
+        Сначала проверяется перцептивное расстояние 0 (точный дубликат),
+        затем — расстояние до ``max_distance``. Возвращает словарь
+        ``{"distance": int, "hashes": list[str]}`` или None.
+        """
+        hashes = self.get_file_hashes(new_hash)
+        if not hashes:
+            return None
+        perceptual_hashes = hashes.get("perceptual_hashes") or []
+        if not perceptual_hashes:
+            return None
+
+        # Исключаем сам файл и его king: Hydrus может вернуть их в выдаче.
+        excluded = {new_hash}
+        if main_hash := self.get_main_file_hash(new_hash):
+            excluded.add(main_hash)
+
+        try:
+            exact = self.find_similar_files(
+                perceptual_hashes,
+                0,
+                exclude_hashes=excluded
+            )
+            if exact:
+                return {"distance": 0, "hashes": exact}
+
+            if max_distance <= 0:
+                return None
+            similar = self.find_similar_files(
+                perceptual_hashes,
+                max_distance,
+                exclude_hashes=excluded
+            )
+        except hydrus_api.HydrusAPIException as ex:
+            logger.warning(f"Не удалось найти дубликаты {new_hash}: {ex}")
+            return None
+
+        if similar:
+            return {"distance": max_distance, "hashes": similar}
+        return None
+
+    def resolve_url_duplicate(
+        self,
+        url: str,
+        new_hash: str,
+        existing_hash: str,
+        *,
+        distance: int,
+        priority_domains: frozenset[str] | set[str],
+        tags: Iterable[str] | None = None
+    ) -> dict[str, object]:
+        """Разрешает дубликат ссылки по приоритету доменов.
+
+        Для расстояния 0 применяется матрица приоритетов: если у
+        существующего файла есть приоритетная ссылка, остаётся он;
+        если приоритетна только новая ссылка — остаётся новый файл.
+        В остальных случаях возвращается ``action="pending"`` для выбора
+        пользователем. Для расстояния больше 0 выбор всегда за пользователем.
+        """
+        result: dict[str, object] = {
+            "action": "pending",
+            "url": url,
+            "new_hash": new_hash,
+            "existing_hash": existing_hash,
+            "distance": distance,
+        }
+        if distance > 0:
+            return result
+
+        try:
+            existing_info = self.get_file_info(existing_hash)
+        except hydrus_api.HydrusAPIException as ex:
+            logger.warning(f"Не удалось получить данные {existing_hash}: {ex}")
+            return result
+        if not existing_info:
+            return result
+
+        existing_urls = [
+            existing_url
+            for existing_url in (existing_info.get("known_urls") or [])
+            if isinstance(existing_url, str)
+        ]
+        if not existing_urls:
+            return result
+
+        existing_priority = any(
+            is_priority_url(existing_url, priority_domains)
+            for existing_url in existing_urls
+        )
+        new_priority = is_priority_url(url, priority_domains)
+
+        if existing_priority:
+            # Обе ссылки приоритетные или новая не приоритетная:
+            # сохраняем существующий файл.
+            action = "kept_existing"
+        elif new_priority:
+            action = "kept_new"
+        else:
+            return result
+
+        try:
+            if action == "kept_existing":
+                self._add_tags_to_existing(existing_hash, tags)
+                self.add_urls(existing_hash, [url])
+                self.set_duplicate_relationship(
+                    existing_hash,
+                    new_hash,
+                    merge_content=True,
+                    delete_worse=True
+                )
+            else:
+                self._add_tags_to_existing(new_hash, tags)
+                self.set_duplicate_relationship(
+                    new_hash,
+                    existing_hash,
+                    merge_content=True,
+                    delete_worse=True
+                )
+        except hydrus_api.HydrusAPIException as ex:
+            logger.warning(f"Не удалось разрешить дубликат {new_hash}: {ex}")
+            return result
+
+        result["action"] = action
+        return result
 
     def find_similar_files(
         self,

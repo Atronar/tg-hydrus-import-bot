@@ -20,7 +20,7 @@ from hydrus_requests import (
     InsecureApiUrlError,
     _TimeoutSession,
 )
-from tests.helpers import FakeHydrusClient, make_hydrus
+from tests.helpers import FakeHydrusClient, FakeResponse, make_hydrus
 
 
 ALL_PERMISSIONS = {
@@ -1148,6 +1148,181 @@ class FindExactDuplicateTests(unittest.TestCase):
             self.hydrus.find_exact_duplicate(
                 BytesIO(b"data"), mime="image/jpeg"
             )
+        )
+
+
+class GetFileHashesTests(unittest.TestCase):
+    def test_reads_content_and_closes_response(self):
+        client = FakeHydrusClient()
+        response = FakeResponse(content=b"data")
+        client.file_response = response
+        client.generated_hashes = {
+            "hash": "h",
+            "perceptual_hashes": ["p"],
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH}, client
+        )
+
+        self.assertEqual(
+            hydrus.get_file_hashes("h"),
+            {"hash": "h", "perceptual_hashes": ["p"]},
+        )
+        self.assertTrue(response.closed)
+        self.assertIn("_api_request", [call[0] for call in client.calls])
+
+    def test_without_permission_returns_none(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus(set(), client)
+
+        self.assertIsNone(hydrus.get_file_hashes("h"))
+        self.assertNotIn(("get_file", "h"), client.calls)
+
+
+class FindUrlDuplicatesTests(unittest.TestCase):
+    def setUp(self):
+        self.client = FakeHydrusClient()
+        self.client.file_response = FakeResponse(content=b"data")
+        self.hydrus = make_hydrus(
+            {
+                HydrusPermission.FILES_SEARCH_FETCH,
+                HydrusPermission.RELATIONSHIPS_EDIT,
+            },
+            self.client,
+        )
+
+    def test_returns_exact_candidate(self):
+        self.client.generated_hashes = {
+            "hash": "new",
+            "perceptual_hashes": ["p"],
+        }
+        self.client.search_hashes = ["candidate"]
+        self.client.relationships = {
+            "candidate": {"king": "existing", "king_is_local": True}
+        }
+        self.client.metadata = {"existing": {"is_local": True}}
+
+        self.assertEqual(
+            self.hydrus.find_url_duplicates("new", 5),
+            {"distance": 0, "hashes": ["existing"]},
+        )
+
+    def test_returns_similar_candidate_when_no_exact(self):
+        self.client.generated_hashes = {
+            "hash": "new",
+            "perceptual_hashes": ["p"],
+        }
+        self.client.relationships = {}
+        self.client.metadata = {"candidate": {"is_local": True}}
+
+        with patch.object(
+            self.hydrus,
+            "find_similar_files",
+            side_effect=[[], ["candidate"]],
+        ):
+            self.assertEqual(
+                self.hydrus.find_url_duplicates("new", 5),
+                {"distance": 5, "hashes": ["candidate"]},
+            )
+
+    def test_without_perceptual_hashes_returns_none(self):
+        self.client.generated_hashes = {"hash": "new"}
+
+        self.assertIsNone(self.hydrus.find_url_duplicates("new", 5))
+
+
+class ResolveUrlDuplicateTests(unittest.TestCase):
+    def setUp(self):
+        self.client = FakeHydrusClient()
+        self.client.cleaned_tags = ["tag"]
+        self.hydrus = make_hydrus(ALL_PERMISSIONS, self.client)
+        self.domains = frozenset({"priority.example"})
+
+    def _resolve(
+        self,
+        *,
+        existing_urls,
+        url,
+        distance=0,
+    ):
+        self.client.metadata["existing"] = {
+            "hash": "existing",
+            "known_urls": existing_urls,
+        }
+        return self.hydrus.resolve_url_duplicate(
+            url,
+            "new",
+            "existing",
+            distance=distance,
+            priority_domains=self.domains,
+            tags=["tag"],
+        )
+
+    def test_keeps_existing_when_it_has_priority_url(self):
+        result = self._resolve(
+            existing_urls=["https://priority.example/a"],
+            url="https://other.example/b",
+        )
+
+        self.assertEqual(result["action"], "kept_existing")
+        self.assertIn(
+            ("associate_url", (["existing"], ["https://other.example/b"])),
+            self.client.calls,
+        )
+        payload = self.client.duplicate_relationship_payloads[-1][0]
+        self.assertEqual(payload["hash_a"], "existing")
+        self.assertEqual(payload["hash_b"], "new")
+        self.assertTrue(payload["delete_b"])
+
+    def test_keeps_new_when_only_new_url_is_priority(self):
+        result = self._resolve(
+            existing_urls=["https://other.example/a"],
+            url="https://priority.example/b",
+        )
+
+        self.assertEqual(result["action"], "kept_new")
+        payload = self.client.duplicate_relationship_payloads[-1][0]
+        self.assertEqual(payload["hash_a"], "new")
+        self.assertEqual(payload["hash_b"], "existing")
+        self.assertTrue(payload["delete_b"])
+
+    def test_keeps_existing_when_both_urls_are_priority(self):
+        result = self._resolve(
+            existing_urls=["https://priority.example/a"],
+            url="https://priority.example/b",
+        )
+
+        self.assertEqual(result["action"], "kept_existing")
+
+    def test_no_existing_urls_requires_choice(self):
+        result = self._resolve(
+            existing_urls=[],
+            url="https://priority.example/b",
+        )
+
+        self.assertEqual(result["action"], "pending")
+        self.assertEqual(self.client.duplicate_relationship_payloads, [])
+
+    def test_both_non_priority_urls_require_choice(self):
+        result = self._resolve(
+            existing_urls=["https://other.example/a"],
+            url="https://other.example/b",
+        )
+
+        self.assertEqual(result["action"], "pending")
+        self.assertEqual(self.client.duplicate_relationship_payloads, [])
+
+    def test_distance_above_zero_requires_choice(self):
+        result = self._resolve(
+            existing_urls=["https://priority.example/a"],
+            url="https://other.example/b",
+            distance=5,
+        )
+
+        self.assertEqual(result["action"], "pending")
+        self.assertNotIn(
+            "get_file_metadata",
+            [call[0] for call in self.client.calls],
         )
 
 
