@@ -10,16 +10,21 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from aiogram import exceptions
+from aiogram.methods import SendPhoto
 from aiogram.types import MessageEntity
 from PIL import Image
 
 from tg_parse_requests import (
     MAX_FILE_SIZE,
+    MAX_PHOTO_ASPECT_RATIO,
+    MAX_PHOTO_DIMENSION_SUM,
     MAX_PHOTO_SIZE,
     _FFMPEG_EXECUTOR,
     _async_convert,
     _convert_video_to_mp4,
     _is_mp4,
+    _photo_dimensions_are_valid,
     _resize_image,
     _stream_content_to_temp,
     answer_disabled_content,
@@ -218,17 +223,79 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(msg.media_data[0][1], b"payload")
 
     async def test_send_photo(self):
+        source = BytesIO()
+        Image.new("RGB", (100, 100), (10, 20, 30)).save(source, "JPEG")
+        content = source.getvalue()
         msg = FakeMessage()
         response = FakeResponse(
-            content=b"jpeg",
+            content=content,
             headers={
                 "Content-Type": "image/jpeg",
-                "Content-Length": "4",
+                "Content-Length": str(len(content)),
             },
         )
         await send_content_from_response(response, msg, "image.jpg")
         self.assertEqual(msg.media[0][0], "photo")
-        self.assertEqual(msg.media_data[0][1], b"jpeg")
+        self.assertEqual(msg.media_data[0][1], content)
+
+    async def test_send_photo_with_invalid_dimensions_is_resized(self):
+        source = BytesIO()
+        Image.new("RGB", (6000, 6000), (10, 20, 30)).save(source, "JPEG")
+        content = source.getvalue()
+        msg = FakeMessage()
+        response = FakeResponse(
+            content=content,
+            headers={
+                "Content-Type": "image/jpeg",
+                "Content-Length": str(len(content)),
+            },
+        )
+
+        await send_content_from_response(response, msg, "image.jpg")
+
+        self.assertEqual(msg.media[0][0], "photo")
+        with Image.open(BytesIO(msg.media_data[0][1])) as image:
+            self.assertTrue(_photo_dimensions_are_valid(*image.size))
+
+    async def test_send_extreme_aspect_ratio_photo_is_document(self):
+        source = BytesIO()
+        Image.new("RGB", (12000, 100), (10, 20, 30)).save(source, "JPEG")
+        content = source.getvalue()
+        msg = FakeMessage()
+        response = FakeResponse(
+            content=content,
+            headers={
+                "Content-Type": "image/jpeg",
+                "Content-Length": str(len(content)),
+            },
+        )
+
+        await send_content_from_response(response, msg, "image.jpg")
+
+        self.assertEqual(msg.media[0][0], "document")
+
+    async def test_photo_invalid_dimensions_falls_back_to_document(self):
+        source = BytesIO()
+        Image.new("RGB", (100, 100), (10, 20, 30)).save(source, "JPEG")
+        content = source.getvalue()
+        msg = FakeMessage()
+        response = FakeResponse(
+            content=content,
+            headers={
+                "Content-Type": "image/jpeg",
+                "Content-Length": str(len(content)),
+            },
+        )
+        error = exceptions.TelegramBadRequest(
+            SendPhoto(chat_id=1, photo="x"),
+            "PHOTO_INVALID_DIMENSIONS",
+        )
+
+        with patch.object(msg, "answer_photo", new=AsyncMock(side_effect=error)):
+            await send_content_from_response(response, msg, "image.jpg")
+
+        self.assertEqual(msg.media[0][0], "document")
+        self.assertEqual(msg.media_data[0][1], content)
 
     async def test_send_audio(self):
         msg = FakeMessage()
@@ -403,16 +470,22 @@ class MediaTests(unittest.TestCase):
         self.assertIsNone(_resize_image(b"not an image", 1))
 
     def test_resize_image_produces_jpeg(self):
-        # Ширина больше 10000, поэтому функция не будет увеличивать изображение.
+        # Сумма сторон больше лимита Telegram, поэтому изображение уменьшается.
         source = BytesIO()
-        Image.new("RGB", (12000, 100), (10, 20, 30)).save(source, format="PNG")
+        Image.new("RGB", (12000, 1000), (10, 20, 30)).save(source, format="PNG")
         content = source.getvalue()
         max_size = len(content) // 2
         resized = _resize_image(content, max_size)
         self.assertIsNotNone(resized)
         with Image.open(BytesIO(resized)) as image:
             self.assertEqual(image.format, "JPEG")
-            self.assertLessEqual(max(image.size), 10000)
+            self.assertTrue(_photo_dimensions_are_valid(*image.size))
+            width, height = image.size
+            self.assertLessEqual(width + height, MAX_PHOTO_DIMENSION_SUM)
+            self.assertLessEqual(
+                max(width / height, height / width),
+                MAX_PHOTO_ASPECT_RATIO,
+            )
         self.assertLessEqual(len(resized), max_size)
 
     def test_resize_image_preserves_aspect_ratio(self):
@@ -445,26 +518,30 @@ class MediaTests(unittest.TestCase):
                     f"{width}x{height} -> {new_width}x{new_height}",
                 )
 
-    def test_resize_image_clamps_small_dimension_to_one(self):
-        # При сильном уменьшении int(height * scale) может стать нулём.
-        # max(1, ...) должен оставить сторону равной одному пикселю.
+    def test_resize_image_rejects_extreme_aspect_ratio(self):
+        # Соотношение сторон больше 20 Telegram не принимает для фото.
         for width, height in ((10000, 2), (2, 10000)):
             with self.subTest(size=(width, height)):
                 source = BytesIO()
-                Image.frombytes(
-                    "RGB",
-                    (width, height),
-                    os.urandom(width * height * 3),
-                ).save(source, format="PNG")
-                content = source.getvalue()
-                resized = _resize_image(content, max_size=1000)
-                self.assertIsNotNone(resized)
-                with Image.open(BytesIO(resized)) as image:
-                    new_width, new_height = image.size
+                Image.new("RGB", (width, height), (10, 20, 30)).save(
+                    source, format="PNG"
+                )
+                self.assertIsNone(
+                    _resize_image(source.getvalue(), max_size=1000)
+                )
 
-                self.assertGreaterEqual(new_width, 1)
-                self.assertGreaterEqual(new_height, 1)
-                self.assertEqual(min(new_width, new_height), 1)
+    def test_resize_image_reduces_dimension_sum(self):
+        source = BytesIO()
+        Image.new("RGB", (6000, 6000), (10, 20, 30)).save(
+            source, format="PNG"
+        )
+        content = source.getvalue()
+
+        resized = _resize_image(content, MAX_PHOTO_SIZE)
+
+        self.assertIsNotNone(resized)
+        with Image.open(BytesIO(resized)) as image:
+            self.assertTrue(_photo_dimensions_are_valid(*image.size))
 
     def test_resize_image_prefers_resolution_over_downscaling(self):
         # Если в лимит можно уложиться снижением качества JPEG,
@@ -494,15 +571,18 @@ class MediaTests(unittest.TestCase):
             self.assertEqual(result.size, (width, height))
 
     def test_resize_image_does_not_upscale(self):
+        width, height = 5000, 300
         source = BytesIO()
-        Image.frombytes("RGB", (5000, 1), os.urandom(15000)).save(
-            source, format="PNG"
-        )
+        Image.frombytes(
+            "RGB", (width, height), os.urandom(width * height * 3)
+        ).save(source, format="PNG")
         content = source.getvalue()
         resized = _resize_image(content, len(content) - 1)
         self.assertIsNotNone(resized)
         with Image.open(BytesIO(resized)) as image:
-            self.assertEqual(image.size, (5000, 1))
+            new_width, new_height = image.size
+            self.assertLessEqual(new_width, width)
+            self.assertLessEqual(new_height, height)
 
     def test_resize_image_converts_rgba_to_jpeg(self):
         source = BytesIO()

@@ -13,6 +13,7 @@ from requests import Response
 from typing import Callable, Iterable, Mapping
 
 import aiogram.methods
+from aiogram import exceptions
 from aiogram.types import BufferedInputFile, FSInputFile, Message, MessageEntity
 from loguru import logger
 from PIL import Image
@@ -22,6 +23,9 @@ from ffmpeg import get_io_mp4
 
 MAX_FILE_SIZE = 50000000 # 50 Mb
 MAX_PHOTO_SIZE = 10000000 # 10 Mb
+# Ограничения Telegram на фото: сумма сторон и соотношение сторон.
+MAX_PHOTO_DIMENSION_SUM = 10000
+MAX_PHOTO_ASPECT_RATIO = 20
 JPEG_QUALITIES = (90, 85, 80, 75)
 SCALE_STEP = 0.85
 
@@ -139,32 +143,85 @@ def _convert_video_to_mp4(content: bytes) -> bytes|None:
             return converted
     return None  # Возврат None при ошибке
 
+def _photo_aspect_ratio_is_valid(width: int, height: int) -> bool:
+    """Проверяет соотношение сторон, допустимое Telegram для фото."""
+    if width <= 0 or height <= 0:
+        return False
+    return max(width / height, height / width) <= MAX_PHOTO_ASPECT_RATIO
+
+
+def _photo_dimensions_are_valid(width: int, height: int) -> bool:
+    """Проверяет размеры фото по ограничениям Telegram Bot API."""
+    if width <= 0 or height <= 0:
+        return False
+    if width + height > MAX_PHOTO_DIMENSION_SUM:
+        return False
+    return _photo_aspect_ratio_is_valid(width, height)
+
+
+def _photo_dimension_scale(width: int, height: int) -> float:
+    """Возвращает масштаб, достаточный для лимита суммы сторон."""
+    dimension_sum = width + height
+    if dimension_sum <= MAX_PHOTO_DIMENSION_SUM:
+        return 1.0
+    return MAX_PHOTO_DIMENSION_SUM / dimension_sum
+
+
+def _image_dimensions(path: Path) -> tuple[int, int] | None:
+    """Читает размеры изображения из файла, не загружая его целиком."""
+    try:
+        with Image.open(path) as image:
+            return image.size
+    except Exception as ex:
+        logger.debug(f"Не удалось определить размеры изображения {path}: {ex}")
+        return None
+
+
 def _resize_image(content: bytes, max_size: int) -> bytes | None:
     """Сжимает изображение до указанного размера с сохранением пропорций.
 
     Сначала пробуем сохранить исходное разрешение, постепенно снижая
     качество JPEG. Только если даже минимальное качество не помещается
-    в лимит, уменьшаем размеры изображения. Так видимая детализация
-    сохраняется лучше, чем при агрессивном даунскейле.
+    в лимит, уменьшаем размеры изображения. Дополнительно размеры
+    приводятся к ограничениям Telegram: сумма сторон и соотношение сторон.
     """
     if len(content) <= max_size:
-        return content
+        try:
+            with Image.open(BytesIO(content)) as img:
+                width, height = img.size
+            if _photo_dimensions_are_valid(width, height):
+                return content
+        except Exception:
+            # Не изображение, но размер уже в лимите — оставляем как есть.
+            return content
+
     try:
         with Image.open(BytesIO(content)) as img:
             original_width, original_height = img.size
+            if not _photo_aspect_ratio_is_valid(original_width, original_height):
+                logger.debug(
+                    "Соотношение сторон не подходит для фото Telegram: "
+                    f"{original_width}x{original_height}"
+                )
+                return None
+
             # JPEG не поддерживает альфа-канал
             image = img.convert("RGB")
 
-            if max_dimension := max(original_width, original_height):
-                # Изображение нельзя увеличивать: только уменьшаем
-                scale = min(1.0, 10000 / max_dimension)
-            else:
-                scale = 1
+            # Изображение нельзя увеличивать: только уменьшаем
+            scale = min(
+                1.0,
+                _photo_dimension_scale(original_width, original_height)
+            )
+
             while scale > 0.001:
                 new_size = (
                     max(1, int(original_width * scale)),
                     max(1, int(original_height * scale))
                 )
+                if not _photo_dimensions_are_valid(*new_size):
+                    scale *= SCALE_STEP
+                    continue
                 resized = (
                     image
                     if new_size == image.size
@@ -313,6 +370,7 @@ async def send_content_from_response(
         file_size = temp_path.stat().st_size
         answer_kwargs = {}
         content: bytes | None = None
+        is_photo = False
 
         if media_type.startswith("video/"):
             if _file_is_mp4(temp_path):
@@ -341,9 +399,25 @@ async def send_content_from_response(
                 input_file = FSInputFile(temp_path, filename)
                 answer_function = msg.answer_document
         elif media_type.startswith("image/"):
-            if file_size <= MAX_PHOTO_SIZE:
+            dimensions = await asyncio.to_thread(_image_dimensions, temp_path)
+            if (
+                dimensions
+                and _photo_dimensions_are_valid(*dimensions)
+                and file_size <= MAX_PHOTO_SIZE
+            ):
                 input_file = FSInputFile(temp_path, filename)
                 answer_function = msg.answer_photo
+                is_photo = True
+            elif (
+                not dimensions
+                or not _photo_aspect_ratio_is_valid(*dimensions)
+            ):
+                logger.warning(
+                    "Изображение не подходит для фото Telegram, "
+                    f"отправляем документом: {dimensions}"
+                )
+                input_file = FSInputFile(temp_path, filename)
+                answer_function = msg.answer_document
             else:
                 content = await asyncio.to_thread(temp_path.read_bytes)
                 if photo_content := await _async_convert(
@@ -351,8 +425,12 @@ async def send_content_from_response(
                 ):
                     input_file = BufferedInputFile(photo_content, filename)
                     answer_function = msg.answer_photo
+                    is_photo = True
                 else:
-                    logger.warning(f"Файл превысил лимит для фото: {file_size} байт")
+                    logger.warning(
+                        "Не удалось уменьшить изображение до лимита фото, "
+                        f"отправляем документом: {file_size} байт"
+                    )
                     input_file = FSInputFile(temp_path, filename)
                     answer_function = msg.answer_document
         elif media_type in _AUDIO_CONTENT_TYPES:
@@ -363,11 +441,25 @@ async def send_content_from_response(
             answer_function = msg.answer_document
 
         logger.debug(f"Используется метод: {answer_function.__name__}")
-        return await answer_function(
-            input_file,
-            reply_to_message_id=msg.message_id,
-            **answer_kwargs
-        )
+        try:
+            return await answer_function(
+                input_file,
+                reply_to_message_id=msg.message_id,
+                **answer_kwargs
+            )
+        except exceptions.TelegramBadRequest as ex:
+            # Даже после проверки Telegram может отклонить конкретные
+            # размеры фото. Тогда отправляем тот же файл документом.
+            if is_photo and "PHOTO_INVALID_DIMENSIONS" in str(ex):
+                logger.warning(
+                    "Telegram отклонил размеры фото, отправляем документом: "
+                    f"{ex}"
+                )
+                return await msg.answer_document(
+                    input_file,
+                    reply_to_message_id=msg.message_id
+                )
+            raise
     finally:
         try:
             temp_path.unlink()
