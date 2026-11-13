@@ -369,14 +369,14 @@ class HydrusRequests:
             "note": str(ex),
         }
 
-    def add_files_from_urls(
+    def _add_files_from_urls(
             self,
             urls: Iterable[str],
             *,
             page_name: str|None = None,
             tags: Iterable[str]|None = None,
             tags_namespace: str|None = None
-        ) -> list[hydrus_api_typing.AddedFile]:
+        ) -> tuple[list[str], list[hydrus_api_typing.AddedFile|None]]:
         """Добавление в Гидрус нескольких ссылок с сохранением их порядка.
 
         Все ссылки ставятся в очередь импорта сразу, после чего их статусы
@@ -401,19 +401,19 @@ class HydrusRequests:
 
         Returns
         -------
-        list[AddedFile]
-            Статусы импорта в порядке исходных ссылок.
-            Ссылки, по которым статус так и не появился, пропускаются.
+        tuple[list[str], list[AddedFile | None]]
+            Уникальные ссылки и их статусы в том же порядке.
+            Для ссылок, по которым статус так и не появился, остаётся None.
         """
         # Без прав на работу со ссылками не имеет смысла
         if not self.check_permission(HydrusPermission.URL_IMPORT_EDIT):
             logger.warning('Отсутствует доступ "import and edit urls"')
-            return []
+            return [], []
 
         # dict.fromkeys сохраняет порядок первого появления и убирает дубликаты
         unique_urls = list(dict.fromkeys(urls))
         if not unique_urls:
-            return []
+            return [], []
         tag_list = list(tags) if tags else []
         # Страница в клиенте, на которую добавится импорт
         if page_name is None:
@@ -536,9 +536,50 @@ class HydrusRequests:
             logger.warning(
                 f"Не дождались статуса импорта для {len(pending)} ссылок"
             )
-        # None-ы (не дождались статуса) не попадают в результат,
-        # но порядок оставшихся ссылок сохраняется
+        return unique_urls, statuses
+
+    def add_files_from_urls(
+            self,
+            urls: Iterable[str],
+            *,
+            page_name: str|None = None,
+            tags: Iterable[str]|None = None,
+            tags_namespace: str|None = None
+        ) -> list[hydrus_api_typing.AddedFile]:
+        """Добавление ссылок и возврат только полученных статусов."""
+        _, statuses = self._add_files_from_urls(
+            urls,
+            page_name=page_name,
+            tags=tags,
+            tags_namespace=tags_namespace
+        )
         return [status for status in statuses if status is not None]
+
+    def add_files_from_urls_detailed(
+            self,
+            urls: Iterable[str],
+            *,
+            page_name: str|None = None,
+            tags: Iterable[str]|None = None,
+            tags_namespace: str|None = None
+        ) -> list[tuple[str, hydrus_api_typing.AddedFile]]:
+        """Добавление ссылок и возврат пар «ссылка — статус».
+
+        Нужен, когда вызывающему коду важно знать, к какой ссылке
+        относится каждый статус: например, для проверки дубликатов.
+        Ссылки без статуса пропускаются.
+        """
+        unique_urls, statuses = self._add_files_from_urls(
+            urls,
+            page_name=page_name,
+            tags=tags,
+            tags_namespace=tags_namespace
+        )
+        return [
+            (url, status)
+            for url, status in zip(unique_urls, statuses)
+            if status is not None
+        ]
 
     def add_file_from_url(
             self,
@@ -814,6 +855,20 @@ class HydrusRequests:
             return None
         return self.client.get_file(hash_=main_file_hash)
 
+    def get_file_bytes(self, file_hash: str):
+        """Получение файла строго по указанному хэшу, без подмены king.
+
+        Нужно для проверки дубликатов только что импортированного файла:
+        ``get_file`` вернул бы king, а сравнить нужно именно новый файл.
+        Требует только права "search and fetch files".
+        """
+        if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH):
+            logger.warning('Отсутствует доступ "search and fetch files"')
+            return None
+        if not file_hash:
+            return None
+        return self.client.get_file(hash_=file_hash)
+
     def get_tags(
         self,
         file_hash: str,
@@ -955,13 +1010,17 @@ class HydrusRequests:
     def find_similar_files(
         self,
         perceptual_hashes: Iterable[str],
-        max_distance: int
+        max_distance: int,
+        *,
+        exclude_hashes: Iterable[str]|None = None
     ) -> list[str]:
         """Ищет локальные файлы с похожими перцептивными хэшами.
 
         Возвращает хэши king-файлов в порядке, который вернул Hydrus.
         Дубликаты и нелокальные записи отфильтровываются.
+        ``exclude_hashes`` позволяет не возвращать сам импортируемый файл.
         """
+        excluded = set(exclude_hashes or ())
         hashes = [file_hash for file_hash in perceptual_hashes if file_hash]
         if not hashes:
             return []
@@ -989,6 +1048,7 @@ class HydrusRequests:
             if (
                 main_hash
                 and main_hash not in result
+                and main_hash not in excluded
                 and self._is_local_file(main_hash)
             ):
                 result.append(main_hash)

@@ -635,6 +635,21 @@ class UrlBatchImportTests(unittest.TestCase):
 
         self.assertEqual(result, [])
 
+    def test_detailed_result_maps_url_to_status(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "u1": [[]],
+            # Уже есть в базе — статус известен до опроса
+            "u2": [[{"status": 2, "hash": "h2"}]],
+        }
+        hydrus = make_hydrus({HydrusPermission.URL_IMPORT_EDIT}, client)
+
+        with patch("hydrus_requests.URL_IMPORT_TIMEOUT", 0), \
+                patch("hydrus_requests.time.sleep"):
+            result = hydrus.add_files_from_urls_detailed(["u1", "u2"])
+
+        self.assertEqual(result, [("u2", {"status": 2, "hash": "h2"})])
+
 
 class CacheTests(unittest.TestCase):
     def test_tags_namespace_is_cached(self):
@@ -871,6 +886,24 @@ class FindSimilarFilesTests(unittest.TestCase):
         self.assertEqual(self.hydrus.find_similar_files([], 5), [])
         self.assertEqual(self.hydrus.find_similar_files([""], 5), [])
 
+    def test_excludes_given_hashes(self):
+        self.client.search_hashes = ["h1", "h2"]
+        self.client.relationships = {
+            "h1": {"king": "k1", "king_is_local": True},
+            "h2": {"king": "k2", "king_is_local": True},
+        }
+        self.client.metadata = {
+            "k1": {"is_local": True},
+            "k2": {"is_local": True},
+        }
+
+        self.assertEqual(
+            self.hydrus.find_similar_files(
+                ["p1"], 5, exclude_hashes=["k1"]
+            ),
+            ["k2"],
+        )
+
 
 class GetFileInfoTests(unittest.TestCase):
     def test_returns_metadata(self):
@@ -902,6 +935,36 @@ class GetFileInfoTests(unittest.TestCase):
             "get_file_metadata",
             [call[0] for call in client.calls],
         )
+
+
+class GetFileBytesTests(unittest.TestCase):
+    def test_returns_file_without_king_resolution(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH}, client
+        )
+
+        self.assertIs(hydrus.get_file_bytes("h"), client.file_response)
+        self.assertIn(("get_file", "h"), client.calls)
+        self.assertNotIn(
+            "get_file_relationships",
+            [call[0] for call in client.calls],
+        )
+
+    def test_without_permission_returns_none(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus(set(), client)
+
+        self.assertIsNone(hydrus.get_file_bytes("h"))
+        self.assertNotIn(("get_file", "h"), client.calls)
+
+    def test_empty_hash_returns_none(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH}, client
+        )
+
+        self.assertIsNone(hydrus.get_file_bytes(""))
 
 
 class SetDuplicateRelationshipTests(unittest.TestCase):
