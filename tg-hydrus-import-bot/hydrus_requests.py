@@ -17,6 +17,7 @@ from hydrus_api_enums import (
     HydrusPermission,
 )
 import hydrus_api_typing
+from media_info import is_exact_duplicate, probe_media
 
 
 HYDRUS_TIMEOUT = (5.0, 60.0)
@@ -893,6 +894,63 @@ class HydrusRequests:
         if not file_metadata:
             return False
         return bool(file_metadata[0].get('is_local'))
+
+    def _add_tags_to_existing(
+        self,
+        file_hash: str,
+        tags: Iterable[str] | None
+    ) -> None:
+        """Добавляет теги существующему файлу, если они переданы."""
+        if tags:
+            self.add_tags(file_hash, tags)
+
+    def find_exact_duplicate(
+        self,
+        file: str | os.PathLike | hydrus_api.BinaryFileLike,
+        *,
+        mime: str | None = None,
+        tags: Iterable[str] | None = None
+    ) -> hydrus_api_typing.AddedFile | None:
+        """Ищет точный дубликат файла, который уже есть в Hydrus.
+
+        Сначала проверяется sha256: Hydrus сам считает такой файл
+        дубликатом. Затем ищутся кандидаты с перцептивным расстоянием 0
+        и сравниваются размеры/длительность. Найденному файлу сразу
+        добавляются теги, повторный импорт не выполняется.
+        """
+        hashes = self.generate_hashes(file)
+        file_hash = hashes.get('hash')
+        if file_hash and (main_hash := self.get_main_file_hash(file_hash)):
+            if self._is_local_file(main_hash):
+                self._add_tags_to_existing(main_hash, tags)
+                return {
+                    "status": int(AddedFileStatus.ALREADY_IN_DATABASE),
+                    "hash": main_hash,
+                    "note": "точный дубликат уже есть в базе",
+                }
+
+        perceptual_hashes = hashes.get('perceptual_hashes') or []
+        if not perceptual_hashes:
+            return None
+
+        candidates = self.find_similar_files(perceptual_hashes, 0)
+        if not candidates:
+            return None
+
+        new_info = probe_media(file, mime)
+        for candidate_hash in candidates:
+            existing_info = self.get_file_info(candidate_hash)
+            if (
+                existing_info
+                and is_exact_duplicate(new_info, existing_info)
+            ):
+                self._add_tags_to_existing(candidate_hash, tags)
+                return {
+                    "status": int(AddedFileStatus.ALREADY_IN_DATABASE),
+                    "hash": candidate_hash,
+                    "note": "точный дубликат уже есть в базе",
+                }
+        return None
 
     def find_similar_files(
         self,

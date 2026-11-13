@@ -100,6 +100,35 @@ def parse_hash_args(args: str | None) -> list[str]:
     return (args or "").split()
 
 
+async def import_file_with_duplicates(
+    hydrus: HydrusRequests,
+    content: str | io.IOBase,
+    *,
+    mime: str | None,
+    tags: list[str]
+) -> list[dict]:
+    """Импортирует файл, если точного дубликата ещё нет.
+
+    Точный дубликат не загружается повторно: теги добавляются
+    существующему файлу, а в ответ попадает статус «уже в базе».
+    """
+    duplicate = await run_hydrus(
+        hydrus.find_exact_duplicate,
+        content,
+        mime=mime,
+        tags=tags
+    )
+    if duplicate:
+        return [duplicate]
+    if hasattr(content, "seek"):
+        content.seek(0)
+    return await run_hydrus(
+        hydrus.import_content,
+        content,
+        tags=tags
+    )
+
+
 async def _answer_once(msg: Message, text: str, **kwargs) -> Message | None:
     """Отправляет одно сообщение, не роняя обработчик на отказе Telegram."""
     try:
@@ -492,12 +521,19 @@ async def start_script():
                         "SauceNAO: не удалось выполнить поиск источников."
                     )
 
-            resp = await run_hydrus(
-                hydrus.import_content,
+            resp = []
+            if urls:
+                resp.extend(await run_hydrus(
+                    hydrus.add_files_from_urls,
+                    urls,
+                    tags=tags
+                ))
+            resp.extend(await import_file_with_duplicates(
+                hydrus,
                 content_file,
-                tags=tags,
-                urls=urls
-            )
+                mime="image/jpeg",
+                tags=tags
+            ))
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
 
@@ -515,10 +551,8 @@ async def start_script():
                 await answer_disabled_content(msg, type(msg_content).__name__)
                 return
 
-            file_format = mime_subtype(
-                getattr(msg_content, "mime_type", None),
-                "mp4"
-            )
+            mime = getattr(msg_content, "mime_type", None) or "video/mp4"
+            file_format = mime_subtype(mime, "mp4")
             content_file = make_temp_file_path(
                 msg_content.file_unique_id,
                 file_format
@@ -533,12 +567,19 @@ async def start_script():
                     content_file
                 )
 
-                resp = await run_hydrus(
-                    hydrus.import_content,
+                resp = []
+                if urls:
+                    resp.extend(await run_hydrus(
+                        hydrus.add_files_from_urls,
+                        urls,
+                        tags=tags
+                    ))
+                resp.extend(await import_file_with_duplicates(
+                    hydrus,
                     content_file,
-                    tags=tags,
-                    urls=urls
-                )
+                    mime=mime,
+                    tags=tags
+                ))
                 logger.debug(f"{resp}")
                 resp_str = hydrus.convert_import_resp_to_str(resp)
 
@@ -555,8 +596,10 @@ async def start_script():
                 await answer_disabled_content(msg, type(msg_content).__name__)
                 return
 
-            mime = mime_subtype(msg_content.mime_type)
-            file_format = "mp3" if mime in ("mpeg", "mp3") else (mime or "mp3")
+            mime = msg_content.mime_type or "audio/mpeg"
+            file_format = mime_subtype(mime, "mp3")
+            if file_format in ("mpeg", "mp3"):
+                file_format = "mp3"
             content_file = make_temp_file_path(
                 msg_content.file_unique_id,
                 file_format
@@ -575,12 +618,19 @@ async def start_script():
                     content_file
                 )
 
-                resp = await run_hydrus(
-                    hydrus.import_content,
+                resp = []
+                if urls:
+                    resp.extend(await run_hydrus(
+                        hydrus.add_files_from_urls,
+                        urls,
+                        tags=tags
+                    ))
+                resp.extend(await import_file_with_duplicates(
+                    hydrus,
                     content_file,
-                    tags=tags,
-                    urls=urls
-                )
+                    mime=mime,
+                    tags=tags
+                ))
                 logger.debug(f"{resp}")
                 resp_str = hydrus.convert_import_resp_to_str(resp)
 
@@ -596,7 +646,8 @@ async def start_script():
                 await answer_disabled_content(msg, type(msg_content).__name__)
                 return
 
-            file_format = mime_subtype(msg_content.mime_type)
+            mime = msg_content.mime_type
+            file_format = mime_subtype(mime)
             content_file = make_temp_file_path(
                 msg_content.file_unique_id,
                 file_format
@@ -611,12 +662,19 @@ async def start_script():
                     content_file
                 )
 
-                resp = await run_hydrus(
-                    hydrus.import_content,
+                resp = []
+                if urls:
+                    resp.extend(await run_hydrus(
+                        hydrus.add_files_from_urls,
+                        urls,
+                        tags=tags
+                    ))
+                resp.extend(await import_file_with_duplicates(
+                    hydrus,
                     content_file,
-                    tags=tags,
-                    urls=urls
-                )
+                    mime=mime,
+                    tags=tags
+                ))
                 logger.debug(f"{resp}")
                 resp_str = hydrus.convert_import_resp_to_str(resp)
 

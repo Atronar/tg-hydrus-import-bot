@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 import hydrus_api
 import requests
+from PIL import Image
 
 from hydrus_api_enums import (
     AddedFileStatus,
@@ -963,6 +964,128 @@ class SetDuplicateRelationshipTests(unittest.TestCase):
             self.hydrus.set_duplicate_relationship("a", "a")
         )
         self.assertEqual(self.client.duplicate_relationship_payloads, [])
+
+
+def make_image(width: int = 100, height: int = 80) -> BytesIO:
+    buffer = BytesIO()
+    Image.new("RGB", (width, height), "red").save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
+class FindExactDuplicateTests(unittest.TestCase):
+    def setUp(self):
+        self.client = FakeHydrusClient()
+        self.client.cleaned_tags = ["tag"]
+        self.hydrus = make_hydrus(
+            {
+                HydrusPermission.FILES_IMPORT_DELETE,
+                HydrusPermission.FILES_SEARCH_FETCH,
+                HydrusPermission.RELATIONSHIPS_EDIT,
+                HydrusPermission.TAGS_EDIT,
+            },
+            self.client,
+        )
+
+    def test_exact_sha256_returns_existing_and_adds_tags(self):
+        self.client.generated_hashes = {"hash": "new"}
+        self.client.relationships = {
+            "new": {"king": "existing", "king_is_local": True}
+        }
+        self.client.metadata = {
+            "existing": {"is_local": True}
+        }
+
+        duplicate = self.hydrus.find_exact_duplicate(
+            BytesIO(b"data"),
+            mime="image/jpeg",
+            tags=["tag"],
+        )
+
+        self.assertEqual(duplicate["status"], int(AddedFileStatus.ALREADY_IN_DATABASE))
+        self.assertEqual(duplicate["hash"], "existing")
+        self.assertIn(
+            ("add_tags", (["existing"], {"tag_service_key": ["tag"]})),
+            self.client.calls,
+        )
+
+    def test_phantom_sha256_is_not_returned(self):
+        self.client.generated_hashes = {"hash": "new"}
+        self.client.relationships = {
+            "new": {"king": "phantom", "king_is_local": True}
+        }
+        self.client.metadata = {
+            "phantom": {"is_local": False}
+        }
+
+        self.assertIsNone(
+            self.hydrus.find_exact_duplicate(
+                BytesIO(b"data"), mime="image/jpeg"
+            )
+        )
+
+    def test_perceptual_zero_returns_not_larger_image(self):
+        self.client.generated_hashes = {
+            "hash": "new",
+            "perceptual_hashes": ["perceptual"],
+        }
+        self.client.search_hashes = ["candidate"]
+        self.client.relationships = {
+            "candidate": {"king": "existing", "king_is_local": True}
+        }
+        self.client.metadata = {
+            "existing": {
+                "is_local": True,
+                "width": 100,
+                "height": 80,
+                "mime": "image/png",
+            }
+        }
+
+        duplicate = self.hydrus.find_exact_duplicate(
+            make_image(100, 80),
+            mime="image/png",
+            tags=["tag"],
+        )
+
+        self.assertEqual(duplicate["hash"], "existing")
+        self.assertIn(
+            ("add_tags", (["existing"], {"tag_service_key": ["tag"]})),
+            self.client.calls,
+        )
+
+    def test_perceptual_zero_returns_none_when_new_is_larger(self):
+        self.client.generated_hashes = {
+            "hash": "new",
+            "perceptual_hashes": ["perceptual"],
+        }
+        self.client.search_hashes = ["candidate"]
+        self.client.relationships = {
+            "candidate": {"king": "existing", "king_is_local": True}
+        }
+        self.client.metadata = {
+            "existing": {
+                "is_local": True,
+                "width": 100,
+                "height": 80,
+            }
+        }
+
+        self.assertIsNone(
+            self.hydrus.find_exact_duplicate(
+                make_image(120, 90), mime="image/png"
+            )
+        )
+
+    def test_without_perceptual_hashes_returns_none(self):
+        self.client.generated_hashes = {"hash": "new"}
+        self.client.relationships = {}
+
+        self.assertIsNone(
+            self.hydrus.find_exact_duplicate(
+                BytesIO(b"data"), mime="image/jpeg"
+            )
+        )
 
 
 if __name__ == "__main__":
