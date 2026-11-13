@@ -2,6 +2,7 @@
 
 import os
 import threading
+import time
 import unittest
 from io import BytesIO
 from unittest.mock import AsyncMock, patch
@@ -10,11 +11,17 @@ from aiogram import exceptions
 import hydrus_api
 
 from start_script import (
+    DUPLICATE_PENDING_TTL,
     HELP_TEXT,
     MAX_MESSAGE_LENGTH,
+    _PENDING_DUPLICATES,
+    _duplicate_keyboard,
+    _store_pending_duplicate,
+    _take_pending_duplicate,
     answer_long_with_retry,
     answer_with_retry,
     download_with_retry,
+    format_duplicate_details,
     get_telegram_proxy,
     handle_request_errors,
     make_temp_file_path,
@@ -353,6 +360,80 @@ class RunHydrusTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_passes_args_and_kwargs(self):
         self.assertEqual(await run_hydrus(lambda a, b=0: a + b, 1, b=2), 3)
+
+
+class DuplicatePromptTests(unittest.TestCase):
+    def setUp(self):
+        _PENDING_DUPLICATES.clear()
+
+    def tearDown(self):
+        _PENDING_DUPLICATES.clear()
+
+    def test_formats_both_files_and_distance(self):
+        pending = {
+            "existing_hash": "existing",
+            "new_hash": "new",
+            "distance": 5,
+            "url": "https://example.com/new",
+            "existing_info": {
+                "mime": "image/png",
+                "size": 1024,
+                "width": 100,
+                "height": 80,
+            },
+            "new_info": {
+                "mime": "image/jpeg",
+                "size": 2048,
+                "width": 90,
+                "height": 70,
+            },
+        }
+
+        text = format_duplicate_details(pending)
+
+        self.assertIn("Похож в пределах 5.", text)
+        self.assertIn("existing", text)
+        self.assertIn("new", text)
+        self.assertIn("image/png", text)
+        self.assertIn("100×80", text)
+        self.assertIn("https://example.com/new", text)
+
+    def test_keyboard_contains_four_actions(self):
+        keyboard = _duplicate_keyboard("token")
+        buttons = [
+            button
+            for row in keyboard.inline_keyboard
+            for button in row
+        ]
+
+        self.assertEqual(len(buttons), 4)
+        self.assertEqual(
+            [button.callback_data for button in buttons],
+            [
+                "dup:keep_existing:token",
+                "dup:keep_new:token",
+                "dup:both_alt:token",
+                "dup:both_unrelated:token",
+            ],
+        )
+
+    def test_pending_duplicate_is_returned_once(self):
+        token = _store_pending_duplicate({"new_hash": "new"})
+
+        self.assertEqual(
+            _take_pending_duplicate(token)["new_hash"],
+            "new",
+        )
+        self.assertIsNone(_take_pending_duplicate(token))
+
+    def test_expired_pending_duplicate_is_removed(self):
+        token = _store_pending_duplicate({"new_hash": "new"})
+        _PENDING_DUPLICATES[token]["created_at"] = (
+            time.time() - DUPLICATE_PENDING_TTL - 1
+        )
+
+        self.assertIsNone(_take_pending_duplicate(token))
+        self.assertNotIn(token, _PENDING_DUPLICATES)
 
 
 if __name__ == "__main__":

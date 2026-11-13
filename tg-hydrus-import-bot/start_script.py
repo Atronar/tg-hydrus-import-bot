@@ -4,26 +4,38 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from functools import partial, wraps
 import html
 import io
 import os
 import re
+import time
 import urllib.request
 from uuid import uuid4
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaAudio,
+    InputMediaDocument,
+    InputMediaPhoto,
+    InputMediaVideo,
+    Message,
+)
 from aiogram import F, exceptions
 import hydrus_api
 from loguru import logger
 
 from config import CONF
 from duplicates import load_priority_domains
-from tools import get_temp_folder, multiline_to_hashtags, split_text
-from hydrus_api_enums import AddedFileStatus
+from tools import bytes_strformat, get_temp_folder, multiline_to_hashtags, split_text
+from hydrus_api_enums import AddedFileStatus, DuplicateRelationship
 from hydrus_requests import HydrusRequests
 from saucenao_api import SauceNAO, SauseNAOException
 from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
@@ -129,6 +141,256 @@ async def import_file_with_duplicates(
         content,
         tags=tags
     )
+
+
+DUPLICATE_PENDING_TTL = 3600
+_PENDING_DUPLICATES: dict[str, dict] = {}
+
+
+def _cleanup_pending_duplicates(now: float | None = None) -> None:
+    """Удаляет решения по дубликатам, которые слишком долго ждали выбора."""
+    current = time.time() if now is None else now
+    for token, pending in list(_PENDING_DUPLICATES.items()):
+        if current - pending.get("created_at", current) > DUPLICATE_PENDING_TTL:
+            _PENDING_DUPLICATES.pop(token, None)
+
+
+def _store_pending_duplicate(data: dict) -> str:
+    """Сохраняет ожидающее решение и возвращает его токен."""
+    _cleanup_pending_duplicates()
+    token = uuid4().hex
+    _PENDING_DUPLICATES[token] = {**data, "created_at": time.time()}
+    return token
+
+
+def _take_pending_duplicate(token: str) -> dict | None:
+    """Возвращает и удаляет ожидающее решение по токену."""
+    _cleanup_pending_duplicates()
+    return _PENDING_DUPLICATES.pop(token, None)
+
+
+def _duplicate_keyboard(token: str) -> InlineKeyboardMarkup:
+    """Клавиатура выбора для пары похожих файлов."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="Оставить первый (существующий)",
+                callback_data=f"dup:keep_existing:{token}"
+            )],
+            [InlineKeyboardButton(
+                text="Оставить второй (новый)",
+                callback_data=f"dup:keep_new:{token}"
+            )],
+            [InlineKeyboardButton(
+                text="Оставить оба — альтернативы",
+                callback_data=f"dup:both_alt:{token}"
+            )],
+            [InlineKeyboardButton(
+                text="Оставить оба — не связаны",
+                callback_data=f"dup:both_unrelated:{token}"
+            )],
+        ]
+    )
+
+
+def _format_timestamp(value: object) -> str | None:
+    """Форматирует время Hydrus, если оно известно."""
+    if not isinstance(value, (int, float)) or value <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M")
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _format_file_info(info: dict | None) -> str:
+    """Кратко описывает файл по метаданным Hydrus."""
+    if not info:
+        return "нет данных"
+    parts: list[str] = []
+    if mime := info.get("mime"):
+        parts.append(str(mime))
+    if isinstance(size := info.get("size"), int):
+        parts.append(bytes_strformat(size))
+    width = info.get("width")
+    height = info.get("height")
+    if isinstance(width, int) and isinstance(height, int):
+        parts.append(f"{width}×{height}")
+    if isinstance(duration := info.get("duration"), (int, float)):
+        parts.append(f"{duration:.1f} с")
+    for label, key in (("изменён", "time_modified"), ("архивирован", "time_archived")):
+        if timestamp := _format_timestamp(info.get(key)):
+            parts.append(f"{label}: {timestamp}")
+    urls = [
+        url for url in (info.get("known_urls") or [])
+        if isinstance(url, str)
+    ]
+    if urls:
+        shown = ", ".join(urls[:3])
+        if len(urls) > 3:
+            shown = f"{shown} …"
+        parts.append(f"ссылки: {shown}")
+    return "; ".join(parts) or "нет данных"
+
+
+def format_duplicate_details(pending: dict) -> str:
+    """Текст с параметрами существующего и нового файлов."""
+    distance = int(pending.get("distance", 0))
+    if distance:
+        similarity = f"Похож в пределах {distance}."
+    else:
+        similarity = "Перцептивное расстояние 0."
+    lines = [
+        "Найден похожий файл.",
+        similarity,
+        "",
+        "Первый (существующий):",
+        f"hash: {pending.get('existing_hash')}",
+        _format_file_info(pending.get("existing_info")),
+        "",
+        "Второй (новый):",
+        f"hash: {pending.get('new_hash')}",
+        _format_file_info(pending.get("new_info")),
+    ]
+    if url := pending.get("url"):
+        lines.extend(["", f"Новая ссылка: {url}"])
+    return "\n".join(lines)
+
+
+def _media_for_duplicate(
+    content: bytes,
+    info: dict | None,
+    label: str,
+    file_hash: str
+):
+    """Создаёт элемент медиагруппы по MIME-типу файла."""
+    mime = str((info or {}).get("mime") or "")
+    extension = mime_subtype(mime, "bin") or "bin"
+    input_file = BufferedInputFile(
+        content,
+        f"{label}_{file_hash[:8]}.{extension}"
+    )
+    if mime.startswith("image/"):
+        return InputMediaPhoto(media=input_file)
+    if mime.startswith("video/"):
+        return InputMediaVideo(media=input_file, supports_streaming=True)
+    if mime.startswith("audio/"):
+        return InputMediaAudio(media=input_file)
+    return InputMediaDocument(media=input_file)
+
+
+async def send_duplicate_prompt(
+    bot: Bot,
+    msg: Message,
+    hydrus: HydrusRequests,
+    pending: dict
+) -> None:
+    """Показывает оба файла и клавиатуру выбора."""
+    media = []
+    for file_hash, info, label in (
+        (pending.get("existing_hash"), pending.get("existing_info"), "existing"),
+        (pending.get("new_hash"), pending.get("new_info"), "new"),
+    ):
+        if not file_hash:
+            continue
+        response = await run_hydrus(hydrus.get_file_bytes, file_hash)
+        if not response:
+            continue
+        try:
+            content = getattr(response, "content", b"")
+            if content:
+                media.append(
+                    _media_for_duplicate(content, info, label, file_hash)
+                )
+        finally:
+            close = getattr(response, "close", None)
+            if close:
+                close()
+
+    if len(media) == 2:
+        try:
+            await bot.send_media_group(
+                msg.chat.id,
+                media,
+                reply_to_message_id=msg.message_id
+            )
+        except (exceptions.TelegramBadRequest, exceptions.TelegramNetworkError) as ex:
+            logger.warning(f"Не удалось отправить медиагруппу дубликатов: {ex}")
+
+    await msg.answer(
+        format_duplicate_details(pending),
+        reply_markup=_duplicate_keyboard(str(pending["token"]))
+    )
+
+
+async def apply_duplicate_action(
+    hydrus: HydrusRequests,
+    pending: dict,
+    action: str
+) -> str:
+    """Применяет выбор пользователя к паре дубликатов."""
+    existing_hash = str(pending.get("existing_hash") or "")
+    new_hash = str(pending.get("new_hash") or "")
+    url = pending.get("url")
+    tags = list(pending.get("tags") or [])
+
+    if action == "keep_existing":
+        if url:
+            await run_hydrus(hydrus.add_urls, existing_hash, [url])
+        if tags:
+            await run_hydrus(hydrus.add_tags, existing_hash, tags)
+        applied = await run_hydrus(
+            hydrus.set_duplicate_relationship,
+            existing_hash,
+            new_hash,
+            merge_content=True,
+            delete_worse=True
+        )
+        if applied:
+            return "Оставлен существующий файл, новая копия удалена."
+        return "Не удалось оставить существующий файл. Смотри логи."
+
+    if action == "keep_new":
+        if tags:
+            await run_hydrus(hydrus.add_tags, new_hash, tags)
+        applied = await run_hydrus(
+            hydrus.set_duplicate_relationship,
+            new_hash,
+            existing_hash,
+            merge_content=True,
+            delete_worse=True
+        )
+        if applied:
+            return "Оставлен новый файл, существующая копия удалена."
+        return "Не удалось оставить новый файл. Смотри логи."
+
+    if action == "both_alt":
+        applied = await run_hydrus(
+            hydrus.set_duplicate_relationship,
+            new_hash,
+            existing_hash,
+            relationship=DuplicateRelationship.ALTERNATE,
+            merge_content=False,
+            delete_worse=False
+        )
+        if applied:
+            return "Оставлены оба файла как альтернативы."
+        return "Не удалось связать файлы. Смотри логи."
+
+    if action == "both_unrelated":
+        applied = await run_hydrus(
+            hydrus.set_duplicate_relationship,
+            new_hash,
+            existing_hash,
+            relationship=DuplicateRelationship.FALSE_POSITIVE,
+            merge_content=False,
+            delete_worse=False
+        )
+        if applied:
+            return "Оставлены оба файла, связь не создана."
+        return "Не удалось убрать связь. Смотри логи."
+
+    return "Неизвестное действие."
 
 
 async def _answer_once(msg: Message, text: str, **kwargs) -> Message | None:
@@ -295,6 +557,7 @@ async def start_script():
     dp = Dispatcher()
     # Единый фильтр для всех сообщений: только администраторы из конфига
     dp.message.filter(F.from_user.id.in_(CONF.TG_ADMIN_ID))
+    dp.callback_query.filter(F.from_user.id.in_(CONF.TG_ADMIN_ID))
     hydrus = await run_hydrus(
         HydrusRequests,
         CONF.HYDRUS_TOKEN,
@@ -496,6 +759,8 @@ async def start_script():
     async def message_handler(msg: Message):
         logger.info("Запуск message_handler")
         sauce_error: str | None = None
+        pending_prompts: list[dict] = []
+        pending_new_hashes: set[str] = set()
         if msg_content := msg.photo:
             if not (msg.photo and "photo" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, "photo")
@@ -718,7 +983,8 @@ async def start_script():
                     )
                     if duplicate:
                         resolved = None
-                        for candidate_hash in duplicate.get("hashes", []):
+                        candidate_hashes = list(duplicate.get("hashes", []))
+                        for candidate_hash in candidate_hashes:
                             result = await run_hydrus(
                                 hydrus.resolve_url_duplicate,
                                 url,
@@ -755,9 +1021,51 @@ async def start_script():
                                         "существующая копия удалена"
                                     ),
                                 }
-                if file_hash and status_code in (
-                    int(AddedFileStatus.SUCCESSFULLY_IMPORTED),
-                    int(AddedFileStatus.ALREADY_IN_DATABASE),
+                        elif candidate_hashes:
+                            candidate_hash = candidate_hashes[0]
+                            distance = int(duplicate.get("distance", 0))
+                            existing_info = await run_hydrus(
+                                hydrus.get_file_info,
+                                candidate_hash
+                            )
+                            new_info = await run_hydrus(
+                                hydrus.get_file_info,
+                                file_hash
+                            )
+                            token = _store_pending_duplicate({
+                                "url": url,
+                                "new_hash": file_hash,
+                                "existing_hash": candidate_hash,
+                                "distance": distance,
+                                "tags": list(tags),
+                                "existing_info": existing_info,
+                                "new_info": new_info,
+                            })
+                            pending_prompts.append({
+                                "token": token,
+                                "url": url,
+                                "new_hash": file_hash,
+                                "existing_hash": candidate_hash,
+                                "distance": distance,
+                                "tags": list(tags),
+                                "existing_info": existing_info,
+                                "new_info": new_info,
+                            })
+                            pending_new_hashes.add(file_hash)
+                            resp[-1] = {
+                                **status,
+                                "note": (
+                                    f"найден похожий файл, "
+                                    f"похож в пределах {distance}"
+                                ),
+                            }
+                if (
+                    file_hash
+                    and file_hash not in pending_new_hashes
+                    and status_code in (
+                        int(AddedFileStatus.SUCCESSFULLY_IMPORTED),
+                        int(AddedFileStatus.ALREADY_IN_DATABASE),
+                    )
                 ):
                     send_hashes.append(file_hash)
 
@@ -795,6 +1103,44 @@ async def start_script():
             reply = f"{reply}\n{sauce_error}"
         logger.info(f"Отправленный ответ: {reply}")
         await answer_with_retry(msg, reply)
+        for pending in pending_prompts:
+            try:
+                await send_duplicate_prompt(bot, msg, hydrus, pending)
+            except Exception as ex:
+                logger.error(f"Не удалось показать выбор дубликата: {ex}")
+
+    @dp.callback_query(F.data.startswith("dup:"))
+    async def duplicate_callback_handler(callback: CallbackQuery):
+        logger.info("Запуск duplicate_callback_handler")
+        parts = (callback.data or "").split(":", 2)
+        if len(parts) != 3:
+            await callback.answer()
+            return
+        _, action, token = parts
+        pending = _take_pending_duplicate(token)
+        if not pending:
+            await callback.answer("Решение устарело", show_alert=True)
+            return
+
+        try:
+            result_text = await apply_duplicate_action(
+                hydrus,
+                pending,
+                action
+            )
+        except hydrus_api.HydrusAPIException as ex:
+            logger.error(f"Ошибка применения решения дубликата: {ex}")
+            result_text = "Ошибка Hydrus API. Смотри логи."
+
+        await callback.answer("Готово")
+        if callback.message and hasattr(callback.message, "edit_text"):
+            try:
+                await callback.message.edit_text(
+                    result_text,
+                    reply_markup=None
+                )
+            except exceptions.TelegramBadRequest as ex:
+                logger.warning(f"Не удалось изменить сообщение: {ex}")
 
     await dp.start_polling(bot)
 
