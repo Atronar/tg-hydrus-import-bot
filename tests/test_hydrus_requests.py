@@ -1151,6 +1151,121 @@ class FindExactDuplicateTests(unittest.TestCase):
         )
 
 
+class FindUploadDuplicateTests(unittest.TestCase):
+    def setUp(self):
+        self.client = FakeHydrusClient()
+        self.client.cleaned_tags = ["tag"]
+        self.hydrus = make_hydrus(
+            {
+                HydrusPermission.FILES_IMPORT_DELETE,
+                HydrusPermission.FILES_SEARCH_FETCH,
+                HydrusPermission.RELATIONSHIPS_EDIT,
+                HydrusPermission.TAGS_EDIT,
+            },
+            self.client,
+        )
+
+    def test_exact_sha256_returns_exact(self):
+        self.client.generated_hashes = {"hash": "new"}
+        self.client.relationships = {
+            "new": {"king": "existing", "king_is_local": True}
+        }
+        self.client.metadata = {"existing": {"is_local": True}}
+
+        result = self.hydrus.find_upload_duplicate(
+            BytesIO(b"data"),
+            mime="image/jpeg",
+            tags=["tag"],
+        )
+
+        self.assertEqual(result["kind"], "exact")
+        self.assertEqual(result["status"]["hash"], "existing")
+
+    def test_perceptual_exact_returns_exact(self):
+        self.client.generated_hashes = {
+            "hash": "new",
+            "perceptual_hashes": ["p"],
+        }
+        self.client.search_hashes = ["candidate"]
+        self.client.relationships = {
+            "candidate": {"king": "existing", "king_is_local": True}
+        }
+        self.client.metadata = {
+            "existing": {
+                "is_local": True,
+                "width": 100,
+                "height": 80,
+            }
+        }
+
+        result = self.hydrus.find_upload_duplicate(
+            make_image(100, 80),
+            mime="image/png",
+            tags=["tag"],
+        )
+
+        self.assertEqual(result["kind"], "exact")
+        self.assertEqual(result["status"]["hash"], "existing")
+
+    def test_larger_image_returns_near_zero(self):
+        self.client.generated_hashes = {
+            "hash": "new",
+            "perceptual_hashes": ["p"],
+        }
+        self.client.search_hashes = ["candidate"]
+        self.client.relationships = {
+            "candidate": {"king": "existing", "king_is_local": True}
+        }
+        self.client.metadata = {
+            "existing": {
+                "is_local": True,
+                "width": 100,
+                "height": 80,
+            }
+        }
+
+        result = self.hydrus.find_upload_duplicate(
+            make_image(120, 90),
+            mime="image/png",
+        )
+
+        self.assertEqual(result["kind"], "near")
+        self.assertEqual(result["distance"], 0)
+        self.assertEqual(result["hashes"], ["existing"])
+        self.assertEqual(result["new_info"].width, 120)
+
+    def test_falls_back_to_max_distance(self):
+        self.client.generated_hashes = {
+            "hash": "new",
+            "perceptual_hashes": ["p"],
+        }
+        self.client.relationships = {}
+        self.client.metadata = {"candidate": {"is_local": True}}
+
+        with patch.object(
+            self.hydrus,
+            "find_similar_files",
+            side_effect=[[], ["candidate"]],
+        ):
+            result = self.hydrus.find_upload_duplicate(
+                make_image(100, 80),
+                mime="image/png",
+                max_distance=5,
+            )
+
+        self.assertEqual(result["kind"], "near")
+        self.assertEqual(result["distance"], 5)
+        self.assertEqual(result["hashes"], ["candidate"])
+
+    def test_without_perceptual_hashes_returns_none(self):
+        self.client.generated_hashes = {"hash": "new"}
+
+        self.assertEqual(
+            self.hydrus.find_upload_duplicate(BytesIO(b"data"))["kind"],
+            "none",
+        )
+
+
 class GetFileHashesTests(unittest.TestCase):
     def test_reads_content_and_closes_response(self):
         client = FakeHydrusClient()

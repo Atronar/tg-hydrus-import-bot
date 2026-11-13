@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from aiogram import exceptions
 import hydrus_api
+from hydrus_api_enums import HydrusPermission
 
 from start_script import (
     DUPLICATE_PENDING_TTL,
@@ -20,8 +21,10 @@ from start_script import (
     _take_pending_duplicate,
     answer_long_with_retry,
     answer_with_retry,
+    apply_duplicate_action,
     download_with_retry,
     format_duplicate_details,
+    import_file_or_prompt,
     get_telegram_proxy,
     handle_request_errors,
     make_temp_file_path,
@@ -30,8 +33,15 @@ from start_script import (
     _sauce_file_error,
     parse_hash_args,
 )
+from media_info import MediaInfo
 from tg_parse_requests import MAX_PHOTO_SIZE
-from tests.helpers import FakeMessage, fake_bot_download, telegram_exception
+from tests.helpers import (
+    FakeHydrusClient,
+    FakeMessage,
+    fake_bot_download,
+    make_hydrus,
+    telegram_exception,
+)
 
 
 class RetryMessage(FakeMessage):
@@ -434,6 +444,118 @@ class DuplicatePromptTests(unittest.TestCase):
 
         self.assertIsNone(_take_pending_duplicate(token))
         self.assertNotIn(token, _PENDING_DUPLICATES)
+
+
+class FileUploadDuplicateFlowTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        _PENDING_DUPLICATES.clear()
+
+    def tearDown(self):
+        _PENDING_DUPLICATES.clear()
+
+    async def test_near_duplicate_creates_prompt_without_import(self):
+        client = FakeHydrusClient()
+        client.metadata["existing"] = {
+            "is_local": True,
+            "mime": "image/png",
+            "width": 100,
+            "height": 80,
+        }
+        hydrus = make_hydrus(
+            {
+                HydrusPermission.FILES_SEARCH_FETCH,
+                HydrusPermission.TAGS_EDIT,
+            },
+            client,
+        )
+        prompts: list[dict] = []
+
+        with patch.object(
+            hydrus,
+            "find_upload_duplicate",
+            return_value={
+                "kind": "near",
+                "distance": 0,
+                "hashes": ["existing"],
+                "new_info": MediaInfo("image", 4, 100, 80),
+            },
+        ):
+            statuses, keep_temp = await import_file_or_prompt(
+                hydrus,
+                BytesIO(b"data"),
+                mime="image/jpeg",
+                tags=["tag"],
+                pending_prompts=prompts,
+            )
+
+        self.assertFalse(keep_temp)
+        self.assertEqual(statuses[0]["hash"], "existing")
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0]["new_content"], b"data")
+        self.assertNotIn("add_file", [call[0] for call in client.calls])
+
+    async def test_keep_existing_does_not_import_new_file(self):
+        client = FakeHydrusClient()
+        client.cleaned_tags = ["tag"]
+        hydrus = make_hydrus(
+            {
+                HydrusPermission.FILES_IMPORT_DELETE,
+                HydrusPermission.TAGS_EDIT,
+                HydrusPermission.RELATIONSHIPS_EDIT,
+            },
+            client,
+        )
+        pending = {
+            "existing_hash": "existing",
+            "new_hash": None,
+            "tags": ["tag"],
+            "new_content": b"data",
+            "new_path": None,
+        }
+
+        result = await apply_duplicate_action(
+            hydrus,
+            pending,
+            "keep_existing",
+        )
+
+        self.assertIn("новый не импортирован", result)
+        self.assertIn(
+            ("add_tags", (["existing"], {"tag_service_key": ["tag"]})),
+            client.calls,
+        )
+        self.assertNotIn("add_file", [call[0] for call in client.calls])
+
+    async def test_keep_new_imports_and_deletes_existing(self):
+        client = FakeHydrusClient()
+        client.cleaned_tags = ["tag"]
+        hydrus = make_hydrus(
+            {
+                HydrusPermission.FILES_IMPORT_DELETE,
+                HydrusPermission.TAGS_EDIT,
+                HydrusPermission.RELATIONSHIPS_EDIT,
+            },
+            client,
+        )
+        pending = {
+            "existing_hash": "existing",
+            "new_hash": None,
+            "tags": ["tag"],
+            "new_content": b"data",
+            "new_path": None,
+        }
+
+        result = await apply_duplicate_action(
+            hydrus,
+            pending,
+            "keep_new",
+        )
+
+        self.assertIn("Оставлен новый файл", result)
+        payload = client.duplicate_relationship_payloads[-1][0]
+        self.assertEqual(payload["hash_a"], "file_hash")
+        self.assertEqual(payload["hash_b"], "existing")
+        self.assertTrue(payload["delete_b"])
 
 
 if __name__ == "__main__":

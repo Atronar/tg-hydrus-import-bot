@@ -1034,6 +1034,92 @@ class HydrusRequests:
                 }
         return None
 
+    def find_upload_duplicate(
+        self,
+        file: str | os.PathLike | hydrus_api.BinaryFileLike,
+        *,
+        mime: str | None = None,
+        tags: Iterable[str] | None = None,
+        max_distance: int = 5
+    ) -> dict[str, object]:
+        """Ищет дубликат загружаемого файла до его импорта.
+
+        Возвращает ``{"kind": "exact", "status": ...}`` для точного
+        дубликата, ``{"kind": "near", "distance": ..., "hashes": ...,
+        "new_info": MediaInfo}`` для похожего файла и ``{"kind": "none"}``.
+        Точный дубликат не импортируется, теги сразу добавляются
+        существующему файлу.
+        """
+        try:
+            hashes = self.generate_hashes(file)
+        except hydrus_api.HydrusAPIException as ex:
+            logger.warning(f"Не удалось получить хэши файла: {ex}")
+            return {"kind": "none"}
+
+        file_hash = hashes.get("hash")
+        if file_hash and (main_hash := self.get_main_file_hash(file_hash)):
+            if self._is_local_file(main_hash):
+                self._add_tags_to_existing(main_hash, tags)
+                return {
+                    "kind": "exact",
+                    "status": {
+                        "status": int(AddedFileStatus.ALREADY_IN_DATABASE),
+                        "hash": main_hash,
+                        "note": "точный дубликат уже есть в базе",
+                    },
+                }
+
+        perceptual_hashes = hashes.get("perceptual_hashes") or []
+        if not perceptual_hashes:
+            return {"kind": "none"}
+
+        try:
+            exact_candidates = self.find_similar_files(perceptual_hashes, 0)
+            if exact_candidates:
+                new_info = probe_media(file, mime)
+                for candidate_hash in exact_candidates:
+                    existing_info = self.get_file_info(candidate_hash)
+                    if (
+                        existing_info
+                        and is_exact_duplicate(new_info, existing_info)
+                    ):
+                        self._add_tags_to_existing(candidate_hash, tags)
+                        return {
+                            "kind": "exact",
+                            "status": {
+                                "status": int(
+                                    AddedFileStatus.ALREADY_IN_DATABASE
+                                ),
+                                "hash": candidate_hash,
+                                "note": "точный дубликат уже есть в базе",
+                            },
+                        }
+                return {
+                    "kind": "near",
+                    "distance": 0,
+                    "hashes": exact_candidates,
+                    "new_info": new_info,
+                }
+
+            if max_distance <= 0:
+                return {"kind": "none"}
+            similar_candidates = self.find_similar_files(
+                perceptual_hashes,
+                max_distance
+            )
+        except hydrus_api.HydrusAPIException as ex:
+            logger.warning(f"Не удалось найти дубликаты файла: {ex}")
+            return {"kind": "none"}
+
+        if similar_candidates:
+            return {
+                "kind": "near",
+                "distance": max_distance,
+                "hashes": similar_candidates,
+                "new_info": probe_media(file, mime),
+            }
+        return {"kind": "none"}
+
     def find_url_duplicates(
         self,
         new_hash: str,

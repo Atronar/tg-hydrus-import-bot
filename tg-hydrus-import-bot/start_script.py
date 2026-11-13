@@ -58,6 +58,8 @@ HELP_TEXT = """Бот импортирует контент из Telegram в Hyd
 /hashtags_by_hash <хэш>... — показать хештеги файлов по хэшам
 /get_hash — в подписи к фото: показать хэш файла, если он уже есть в Hydrus
 
+Похожие файлы показываются с выбором: оставить существующий, новый или оба. Точные дубликаты не импортируются.
+
 Командам с хэшами нужны права Hydrus "search and fetch files" и "manage file relationships". Команды SauceNAO работают, только если задан SAUCENAO_TOKEN."""
 
 # Все синхронные запросы к Hydrus идут через один поток:
@@ -114,33 +116,91 @@ def parse_hash_args(args: str | None) -> list[str]:
     return (args or "").split()
 
 
-async def import_file_with_duplicates(
+def _media_info_to_dict(info, mime: str | None) -> dict:
+    """Преобразует MediaInfo в словарь для карточки дубликата."""
+    if info is None:
+        return {"mime": mime}
+    return {
+        "mime": mime,
+        "size": info.size,
+        "width": info.width,
+        "height": info.height,
+        "duration": info.duration,
+    }
+
+
+async def import_file_or_prompt(
     hydrus: HydrusRequests,
     content: str | io.IOBase,
     *,
     mime: str | None,
-    tags: list[str]
-) -> list[dict]:
-    """Импортирует файл, если точного дубликата ещё нет.
+    tags: list[str],
+    pending_prompts: list[dict]
+) -> tuple[list[dict], bool]:
+    """Импортирует файл или готовит выбор при похожем дубликате.
 
-    Точный дубликат не загружается повторно: теги добавляются
-    существующему файлу, а в ответ попадает статус «уже в базе».
+    Возвращает статусы и признак того, что временный файл нужно сохранить
+    до решения пользователя.
     """
-    duplicate = await run_hydrus(
-        hydrus.find_exact_duplicate,
+    result = await run_hydrus(
+        hydrus.find_upload_duplicate,
         content,
         mime=mime,
-        tags=tags
+        tags=tags,
+        max_distance=CONF.DUPLICATE_MAX_DISTANCE
     )
-    if duplicate:
-        return [duplicate]
+    kind = result.get("kind")
+    if kind == "exact":
+        return [result["status"]], False
+
+    if kind == "near":
+        candidate_hashes = list(result.get("hashes", []))
+        if not candidate_hashes:
+            return [], False
+        candidate_hash = candidate_hashes[0]
+        distance = int(result.get("distance", 0))
+        existing_info = await run_hydrus(
+            hydrus.get_file_info,
+            candidate_hash
+        )
+        new_info = _media_info_to_dict(result.get("new_info"), mime)
+        new_content = None
+        new_path = None
+        if hasattr(content, "getvalue"):
+            new_content = content.getvalue()
+        elif isinstance(content, (str, os.PathLike)):
+            new_path = str(content)
+
+        pending = {
+            "url": None,
+            "new_hash": None,
+            "existing_hash": candidate_hash,
+            "distance": distance,
+            "tags": list(tags),
+            "existing_info": existing_info,
+            "new_info": new_info,
+            "new_content": new_content,
+            "new_path": new_path,
+        }
+        token = _store_pending_duplicate(pending)
+        pending_prompts.append({**pending, "token": token})
+        status = {
+            "status": int(AddedFileStatus.ALREADY_IN_DATABASE),
+            "hash": candidate_hash,
+            "note": (
+                f"найден похожий файл, похож в пределах {distance}; "
+                "выберите, что оставить"
+            ),
+        }
+        return [status], new_path is not None
+
     if hasattr(content, "seek"):
         content.seek(0)
     return await run_hydrus(
         hydrus.import_content,
         content,
         tags=tags
-    )
+    ), False
 
 
 DUPLICATE_PENDING_TTL = 3600
@@ -152,6 +212,8 @@ def _cleanup_pending_duplicates(now: float | None = None) -> None:
     current = time.time() if now is None else now
     for token, pending in list(_PENDING_DUPLICATES.items()):
         if current - pending.get("created_at", current) > DUPLICATE_PENDING_TTL:
+            if new_path := pending.get("new_path"):
+                remove_temp_file(str(new_path))
             _PENDING_DUPLICATES.pop(token, None)
 
 
@@ -249,7 +311,7 @@ def format_duplicate_details(pending: dict) -> str:
         _format_file_info(pending.get("existing_info")),
         "",
         "Второй (новый):",
-        f"hash: {pending.get('new_hash')}",
+        f"hash: {pending.get('new_hash') or 'ещё не импортирован'}",
         _format_file_info(pending.get("new_info")),
     ]
     if url := pending.get("url"):
@@ -291,21 +353,36 @@ async def send_duplicate_prompt(
         (pending.get("existing_hash"), pending.get("existing_info"), "existing"),
         (pending.get("new_hash"), pending.get("new_info"), "new"),
     ):
-        if not file_hash:
-            continue
-        response = await run_hydrus(hydrus.get_file_bytes, file_hash)
-        if not response:
-            continue
-        try:
-            content = getattr(response, "content", b"")
-            if content:
-                media.append(
-                    _media_for_duplicate(content, info, label, file_hash)
+        content = None
+        if label == "new":
+            content = pending.get("new_content")
+            if content is None and (new_path := pending.get("new_path")):
+                try:
+                    with open(str(new_path), "rb") as file:
+                        content = file.read()
+                except OSError as ex:
+                    logger.warning(f"Не удалось прочитать {new_path}: {ex}")
+        if content is None:
+            if not file_hash:
+                continue
+            response = await run_hydrus(hydrus.get_file_bytes, file_hash)
+            if not response:
+                continue
+            try:
+                content = getattr(response, "content", b"")
+            finally:
+                close = getattr(response, "close", None)
+                if close:
+                    close()
+        if content:
+            media.append(
+                _media_for_duplicate(
+                    content,
+                    info,
+                    label,
+                    str(file_hash or "new")
                 )
-        finally:
-            close = getattr(response, "close", None)
-            if close:
-                close()
+            )
 
     if len(media) == 2:
         try:
@@ -333,51 +410,93 @@ async def apply_duplicate_action(
     new_hash = str(pending.get("new_hash") or "")
     url = pending.get("url")
     tags = list(pending.get("tags") or [])
+    new_path = pending.get("new_path")
 
-    if action == "keep_existing":
-        if url:
-            await run_hydrus(hydrus.add_urls, existing_hash, [url])
-        if tags:
-            await run_hydrus(hydrus.add_tags, existing_hash, tags)
-        applied = await run_hydrus(
-            hydrus.set_duplicate_relationship,
-            existing_hash,
-            new_hash,
-            merge_content=True,
-            delete_worse=True
-        )
-        if applied:
-            return "Оставлен существующий файл, новая копия удалена."
-        return "Не удалось оставить существующий файл. Смотри логи."
+    if action not in (
+        "keep_existing",
+        "keep_new",
+        "both_alt",
+        "both_unrelated",
+    ):
+        return "Неизвестное действие."
 
-    if action == "keep_new":
-        if tags:
-            await run_hydrus(hydrus.add_tags, new_hash, tags)
-        applied = await run_hydrus(
-            hydrus.set_duplicate_relationship,
-            new_hash,
-            existing_hash,
-            merge_content=True,
-            delete_worse=True
-        )
-        if applied:
-            return "Оставлен новый файл, существующая копия удалена."
-        return "Не удалось оставить новый файл. Смотри логи."
+    try:
+        # Для загруженного файла новый файл ещё не импортирован:
+        # импортируем его только после выбора пользователя.
+        if action != "keep_existing" and not new_hash:
+            source = pending.get("new_content")
+            if source is not None:
+                source = io.BytesIO(source)
+            elif new_path:
+                source = str(new_path)
+            else:
+                return "Нет данных для импорта нового файла."
 
-    if action == "both_alt":
-        applied = await run_hydrus(
-            hydrus.set_duplicate_relationship,
-            new_hash,
-            existing_hash,
-            relationship=DuplicateRelationship.ALTERNATE,
-            merge_content=False,
-            delete_worse=False
-        )
-        if applied:
-            return "Оставлены оба файла как альтернативы."
-        return "Не удалось связать файлы. Смотри логи."
+            statuses = await run_hydrus(
+                hydrus.import_content,
+                source,
+                tags=tags
+            )
+            for status in statuses:
+                if status_hash := status.get("hash"):
+                    new_hash = str(status_hash)
+                    break
+            if not new_hash:
+                return "Не удалось импортировать новый файл. Смотри логи."
 
-    if action == "both_unrelated":
+        if new_hash and new_hash == existing_hash:
+            if tags:
+                await run_hydrus(hydrus.add_tags, existing_hash, tags)
+            return "Файл оказался точным дубликатом, оставлен существующий."
+
+        if action == "keep_existing":
+            if url:
+                await run_hydrus(hydrus.add_urls, existing_hash, [url])
+            if tags:
+                await run_hydrus(hydrus.add_tags, existing_hash, tags)
+            if new_hash:
+                applied = await run_hydrus(
+                    hydrus.set_duplicate_relationship,
+                    existing_hash,
+                    new_hash,
+                    merge_content=True,
+                    delete_worse=True
+                )
+            else:
+                applied = True
+            if applied:
+                if new_hash:
+                    return "Оставлен существующий файл, новая копия удалена."
+                return "Оставлен существующий файл, новый не импортирован."
+            return "Не удалось оставить существующий файл. Смотри логи."
+
+        if action == "keep_new":
+            if tags:
+                await run_hydrus(hydrus.add_tags, new_hash, tags)
+            applied = await run_hydrus(
+                hydrus.set_duplicate_relationship,
+                new_hash,
+                existing_hash,
+                merge_content=True,
+                delete_worse=True
+            )
+            if applied:
+                return "Оставлен новый файл, существующая копия удалена."
+            return "Не удалось оставить новый файл. Смотри логи."
+
+        if action == "both_alt":
+            applied = await run_hydrus(
+                hydrus.set_duplicate_relationship,
+                new_hash,
+                existing_hash,
+                relationship=DuplicateRelationship.ALTERNATE,
+                merge_content=False,
+                delete_worse=False
+            )
+            if applied:
+                return "Оставлены оба файла как альтернативы."
+            return "Не удалось связать файлы. Смотри логи."
+
         applied = await run_hydrus(
             hydrus.set_duplicate_relationship,
             new_hash,
@@ -389,8 +508,9 @@ async def apply_duplicate_action(
         if applied:
             return "Оставлены оба файла, связь не создана."
         return "Не удалось убрать связь. Смотри логи."
-
-    return "Неизвестное действие."
+    finally:
+        if new_path:
+            remove_temp_file(str(new_path))
 
 
 async def _answer_once(msg: Message, text: str, **kwargs) -> Message | None:
@@ -796,12 +916,14 @@ async def start_script():
                     urls,
                     tags=tags
                 ))
-            resp.extend(await import_file_with_duplicates(
+            file_resp, _ = await import_file_or_prompt(
                 hydrus,
                 content_file,
                 mime="image/jpeg",
-                tags=tags
-            ))
+                tags=tags,
+                pending_prompts=pending_prompts
+            )
+            resp.extend(file_resp)
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
 
@@ -825,6 +947,7 @@ async def start_script():
                 msg_content.file_unique_id,
                 file_format
             )
+            keep_temp = False
             try:
                 # Из текста достаём теги и ссылки
                 tags = get_tags_from_msg(msg)
@@ -842,12 +965,14 @@ async def start_script():
                         urls,
                         tags=tags
                     ))
-                resp.extend(await import_file_with_duplicates(
+                file_resp, keep_temp = await import_file_or_prompt(
                     hydrus,
                     content_file,
                     mime=mime,
-                    tags=tags
-                ))
+                    tags=tags,
+                    pending_prompts=pending_prompts
+                )
+                resp.extend(file_resp)
                 logger.debug(f"{resp}")
                 resp_str = hydrus.convert_import_resp_to_str(resp)
 
@@ -857,7 +982,8 @@ async def start_script():
                     content_size=os.path.getsize(content_file)
                 )
             finally:
-                remove_temp_file(content_file)
+                if not keep_temp:
+                    remove_temp_file(content_file)
         elif msg_content := (msg.audio or msg.voice):
             if not ((msg.audio and "audio" in CONF.CONTENT_TYPES) \
                 or (msg.voice and "voice" in CONF.CONTENT_TYPES)):
@@ -872,6 +998,7 @@ async def start_script():
                 msg_content.file_unique_id,
                 file_format
             )
+            keep_temp = False
             try:
                 # Из текста достаём теги и ссылки
                 tags = get_tags_from_msg(msg)
@@ -893,12 +1020,14 @@ async def start_script():
                         urls,
                         tags=tags
                     ))
-                resp.extend(await import_file_with_duplicates(
+                file_resp, keep_temp = await import_file_or_prompt(
                     hydrus,
                     content_file,
                     mime=mime,
-                    tags=tags
-                ))
+                    tags=tags,
+                    pending_prompts=pending_prompts
+                )
+                resp.extend(file_resp)
                 logger.debug(f"{resp}")
                 resp_str = hydrus.convert_import_resp_to_str(resp)
 
@@ -908,7 +1037,8 @@ async def start_script():
                     content_size=os.path.getsize(content_file)
                 )
             finally:
-                remove_temp_file(content_file)
+                if not keep_temp:
+                    remove_temp_file(content_file)
         elif msg_content := msg.document:
             if not (msg.document and "document" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, type(msg_content).__name__)
@@ -920,6 +1050,7 @@ async def start_script():
                 msg_content.file_unique_id,
                 file_format
             )
+            keep_temp = False
             try:
                 # Из текста достаём теги и ссылки
                 tags = get_tags_from_msg(msg)
@@ -937,12 +1068,14 @@ async def start_script():
                         urls,
                         tags=tags
                     ))
-                resp.extend(await import_file_with_duplicates(
+                file_resp, keep_temp = await import_file_or_prompt(
                     hydrus,
                     content_file,
                     mime=mime,
-                    tags=tags
-                ))
+                    tags=tags,
+                    pending_prompts=pending_prompts
+                )
+                resp.extend(file_resp)
                 logger.debug(f"{resp}")
                 resp_str = hydrus.convert_import_resp_to_str(resp)
 
@@ -952,7 +1085,8 @@ async def start_script():
                     content_size=os.path.getsize(content_file)
                 )
             finally:
-                remove_temp_file(content_file)
+                if not keep_temp:
+                    remove_temp_file(content_file)
         elif msg.text:
             if not (msg.text and "text" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, "text")
@@ -1122,6 +1256,10 @@ async def start_script():
             await callback.answer("Решение устарело", show_alert=True)
             return
 
+        # Отвечаем сразу: импорт и связи Hydrus могут занять больше
+        # времени, чем Telegram отводит на callback query.
+        await callback.answer("Принято")
+
         try:
             result_text = await apply_duplicate_action(
                 hydrus,
@@ -1132,7 +1270,6 @@ async def start_script():
             logger.error(f"Ошибка применения решения дубликата: {ex}")
             result_text = "Ошибка Hydrus API. Смотри логи."
 
-        await callback.answer("Готово")
         if callback.message and hasattr(callback.message, "edit_text"):
             try:
                 await callback.message.edit_text(
