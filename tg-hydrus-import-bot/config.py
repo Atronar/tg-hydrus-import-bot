@@ -52,6 +52,7 @@ class ConfigModel(BaseModel):
     ]
     HYDRUS_API_URL: str
     ALLOW_INSECURE_HYDRUS: bool = False
+    DUPLICATE_MAX_DISTANCE: Annotated[int, Field(ge=0)] = 5
     TIME_TO_SLEEP: Annotated[float, Field(gt=0)]
     TAGS_NAMESPACE: str
     DESTINATION_PAGE_NAME: str

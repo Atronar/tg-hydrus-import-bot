@@ -63,6 +63,16 @@ class ConfigModelTests(unittest.TestCase):
         )
         self.assertTrue(config.ALLOW_INSECURE_HYDRUS)
 
+    def test_duplicate_max_distance_defaults_to_five(self):
+        config = ConfigModel(**TEST_CONFIG)
+        self.assertEqual(config.DUPLICATE_MAX_DISTANCE, 5)
+
+    def test_negative_duplicate_max_distance_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            ConfigModel(
+                **{**TEST_CONFIG, "DUPLICATE_MAX_DISTANCE": -1}
+            )
+
 
 class PathExpansionTests(unittest.TestCase):
     def test_percent_environment_variable_is_expanded(self):
