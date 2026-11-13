@@ -1056,18 +1056,21 @@ class HydrusRequests:
             logger.warning(f"Не удалось получить хэши файла: {ex}")
             return {"kind": "none"}
 
-        file_hash = hashes.get("hash")
-        if file_hash and (main_hash := self.get_main_file_hash(file_hash)):
-            if self._is_local_file(main_hash):
-                self._add_tags_to_existing(main_hash, tags)
-                return {
-                    "kind": "exact",
-                    "status": {
-                        "status": int(AddedFileStatus.ALREADY_IN_DATABASE),
-                        "hash": main_hash,
-                        "note": "точный дубликат уже есть в базе",
-                    },
-                }
+        try:
+            file_hash = hashes.get("hash")
+            if file_hash and (main_hash := self.get_main_file_hash(file_hash)):
+                if self._is_local_file(main_hash):
+                    self._add_tags_to_existing(main_hash, tags)
+                    return {
+                        "kind": "exact",
+                        "status": {
+                            "status": int(AddedFileStatus.ALREADY_IN_DATABASE),
+                            "hash": main_hash,
+                            "note": "точный дубликат уже есть в базе",
+                        },
+                    }
+        except hydrus_api.HydrusAPIException as ex:
+            logger.warning(f"Не удалось проверить sha256 файла: {ex}")
 
         perceptual_hashes = hashes.get("perceptual_hashes") or []
         if not perceptual_hashes:
@@ -1133,7 +1136,11 @@ class HydrusRequests:
         """
         # Перцептивные дубликаты имеют смысл только для изображений.
         # Видео и документы не скачиваем целиком ради проверки.
-        info = self.get_file_info(new_hash)
+        try:
+            info = self.get_file_info(new_hash)
+        except hydrus_api.HydrusAPIException as ex:
+            logger.warning(f"Не удалось получить тип файла {new_hash}: {ex}")
+            return None
         mime = str((info or {}).get("mime") or "")
         if not mime.startswith("image/"):
             return None
