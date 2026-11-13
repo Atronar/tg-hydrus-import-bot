@@ -8,7 +8,11 @@ from unittest.mock import Mock, patch
 import hydrus_api
 import requests
 
-from hydrus_api_enums import AddedFileStatus, HydrusPermission
+from hydrus_api_enums import (
+    AddedFileStatus,
+    DuplicateRelationship,
+    HydrusPermission,
+)
 from hydrus_requests import (
     HYDRUS_TIMEOUT,
     HydrusRequests,
@@ -782,6 +786,183 @@ class TimeoutSessionTests(unittest.TestCase):
         session = client_class.call_args.kwargs["session"]
         self.assertIsInstance(session, _TimeoutSession)
         self.assertEqual(session._timeout, HYDRUS_TIMEOUT)
+
+
+class FindSimilarFilesTests(unittest.TestCase):
+    def setUp(self):
+        self.client = FakeHydrusClient()
+        self.hydrus = make_hydrus(
+            {
+                HydrusPermission.FILES_SEARCH_FETCH,
+                HydrusPermission.RELATIONSHIPS_EDIT,
+            },
+            self.client,
+        )
+
+    def test_builds_query_and_filters_candidates(self):
+        self.client.search_hashes = ["h1", "h2", "h1"]
+        self.client.relationships = {
+            "h1": {"king": "k1", "king_is_local": True},
+            "h2": {"king": "k2", "king_is_local": True},
+        }
+        self.client.metadata = {
+            "k1": {"is_local": True},
+            "k2": {"is_local": True},
+        }
+
+        result = self.hydrus.find_similar_files(["p1", "p2"], 5)
+
+        self.assertEqual(result, ["k1", "k2"])
+        self.assertIn(
+            (
+                "search_files",
+                (
+                    ["system:similar to data p1 p2 distance 5"],
+                    True,
+                ),
+            ),
+            self.client.calls,
+        )
+
+    def test_non_local_candidates_are_filtered(self):
+        self.client.search_hashes = ["h1", "h2"]
+        self.client.relationships = {
+            "h1": {"king": "k1", "king_is_local": True},
+            "h2": {"king": "k2", "king_is_local": True},
+        }
+        self.client.metadata = {
+            "k1": {"is_local": True},
+            "k2": {"is_local": False},
+        }
+
+        self.assertEqual(
+            self.hydrus.find_similar_files(["p1"], 5),
+            ["k1"],
+        )
+
+    def test_without_search_permission_returns_empty(self):
+        self.hydrus = make_hydrus(
+            {HydrusPermission.RELATIONSHIPS_EDIT},
+            self.client,
+        )
+        self.client.search_hashes = ["h1"]
+
+        self.assertEqual(self.hydrus.find_similar_files(["p1"], 5), [])
+        self.assertNotIn(
+            "search_files",
+            [call[0] for call in self.client.calls],
+        )
+
+    def test_without_relationships_permission_returns_empty(self):
+        self.hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH},
+            self.client,
+        )
+        self.client.search_hashes = ["h1"]
+
+        self.assertEqual(self.hydrus.find_similar_files(["p1"], 5), [])
+        self.assertNotIn(
+            "search_files",
+            [call[0] for call in self.client.calls],
+        )
+
+    def test_empty_hashes_return_empty(self):
+        self.assertEqual(self.hydrus.find_similar_files([], 5), [])
+        self.assertEqual(self.hydrus.find_similar_files([""], 5), [])
+
+
+class GetFileInfoTests(unittest.TestCase):
+    def test_returns_metadata(self):
+        client = FakeHydrusClient()
+        client.metadata["h"] = {"hash": "h", "known_urls": ["u"]}
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH}, client
+        )
+
+        self.assertEqual(
+            hydrus.get_file_info("h"),
+            {"hash": "h", "known_urls": ["u"]},
+        )
+
+    def test_missing_metadata_returns_none(self):
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH}, FakeHydrusClient()
+        )
+
+        self.assertIsNone(hydrus.get_file_info("missing"))
+
+    def test_without_permission_returns_none(self):
+        client = FakeHydrusClient()
+        client.metadata["h"] = {"hash": "h"}
+        hydrus = make_hydrus(set(), client)
+
+        self.assertIsNone(hydrus.get_file_info("h"))
+        self.assertNotIn(
+            "get_file_metadata",
+            [call[0] for call in client.calls],
+        )
+
+
+class SetDuplicateRelationshipTests(unittest.TestCase):
+    def setUp(self):
+        self.client = FakeHydrusClient()
+        self.hydrus = make_hydrus(
+            {HydrusPermission.RELATIONSHIPS_EDIT}, self.client
+        )
+
+    def test_better_with_deletion_builds_payload(self):
+        result = self.hydrus.set_duplicate_relationship(
+            "better",
+            "worse",
+            relationship=DuplicateRelationship.BETTER,
+            merge_content=True,
+            delete_worse=True,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(
+            self.client.duplicate_relationship_payloads,
+            [[
+                {
+                    "hash_a": "better",
+                    "hash_b": "worse",
+                    "relationship": int(DuplicateRelationship.BETTER),
+                    "do_default_content_merge": True,
+                    "delete_b": True,
+                }
+            ]],
+        )
+
+    def test_alternates_without_merge(self):
+        self.assertTrue(
+            self.hydrus.set_duplicate_relationship(
+                "a",
+                "b",
+                relationship=DuplicateRelationship.ALTERNATE,
+                merge_content=False,
+            )
+        )
+        payload = self.client.duplicate_relationship_payloads[0][0]
+        self.assertEqual(
+            payload["relationship"],
+            int(DuplicateRelationship.ALTERNATE),
+        )
+        self.assertFalse(payload["do_default_content_merge"])
+        self.assertNotIn("delete_b", payload)
+
+    def test_without_permission_returns_false(self):
+        hydrus = make_hydrus(set(), self.client)
+
+        self.assertFalse(
+            hydrus.set_duplicate_relationship("a", "b")
+        )
+        self.assertEqual(self.client.duplicate_relationship_payloads, [])
+
+    def test_same_hash_returns_false(self):
+        self.assertFalse(
+            self.hydrus.set_duplicate_relationship("a", "a")
+        )
+        self.assertEqual(self.client.duplicate_relationship_payloads, [])
 
 
 if __name__ == "__main__":

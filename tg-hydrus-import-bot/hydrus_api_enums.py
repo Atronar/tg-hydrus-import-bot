@@ -55,6 +55,18 @@ class AddedFileStatus(IntEnum):
     FAILED_TO_IMPORT = 4
     VETOED = 7
 
+class DuplicateRelationship(IntEnum):
+    """
+    Тип связи в /manage_file_relationships/set_file_relationships
+    https://hydrusnetwork.github.io/hydrus/developer_api.html#manage_file_relationships_set_file_relationships
+    """
+    POTENTIAL = 0
+    FALSE_POSITIVE = 1
+    SAME_QUALITY = 2
+    ALTERNATE = 3
+    BETTER = 4
+
+
 class PageType(IntEnum):
     """
     Типы страниц

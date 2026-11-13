@@ -11,7 +11,11 @@ from cachetools import TTLCache
 import hydrus_api
 from loguru import logger
 import requests
-from hydrus_api_enums import HydrusPermission, AddedFileStatus
+from hydrus_api_enums import (
+    AddedFileStatus,
+    DuplicateRelationship,
+    HydrusPermission,
+)
 import hydrus_api_typing
 
 
@@ -889,6 +893,101 @@ class HydrusRequests:
         if not file_metadata:
             return False
         return bool(file_metadata[0].get('is_local'))
+
+    def find_similar_files(
+        self,
+        perceptual_hashes: Iterable[str],
+        max_distance: int
+    ) -> list[str]:
+        """Ищет локальные файлы с похожими перцептивными хэшами.
+
+        Возвращает хэши king-файлов в порядке, который вернул Hydrus.
+        Дубликаты и нелокальные записи отфильтровываются.
+        """
+        hashes = [file_hash for file_hash in perceptual_hashes if file_hash]
+        if not hashes:
+            return []
+        if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH):
+            logger.warning('Отсутствует доступ "search and fetch files"')
+            return []
+        if not self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT):
+            logger.warning('Отсутствует доступ "manage file relationships"')
+            return []
+
+        query = (
+            f"system:similar to data {' '.join(hashes)} "
+            f"distance {max(0, max_distance)}"
+        )
+        found_hashes: list[str] = (
+            self.client.search_files(
+                [query],
+                return_hashes=True
+            ).get('hashes', [])
+        )
+
+        result: list[str] = []
+        for found_hash in found_hashes:
+            main_hash = self.get_main_file_hash(found_hash)
+            if (
+                main_hash
+                and main_hash not in result
+                and self._is_local_file(main_hash)
+            ):
+                result.append(main_hash)
+        return result
+
+    def get_file_info(self, file_hash: str) -> dict[str, object] | None:
+        """Возвращает метаданные файла, включая известные ссылки."""
+        if not file_hash:
+            return None
+        if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH):
+            logger.warning('Отсутствует доступ "search and fetch files"')
+            return None
+
+        file_metadata = (
+            self.client
+            .get_file_metadata(
+                hashes=[file_hash,],
+                detailed_url_information=True
+            )
+            .get('metadata', [])
+        )
+        if not file_metadata:
+            return None
+        return file_metadata[0]
+
+    def set_duplicate_relationship(
+        self,
+        better_hash: str,
+        worse_hash: str,
+        *,
+        relationship: DuplicateRelationship|int = DuplicateRelationship.BETTER,
+        merge_content: bool = True,
+        delete_worse: bool = False
+    ) -> bool:
+        """Задаёт связь между файлами в системе дубликатов Hydrus.
+
+        ``better_hash`` и ``worse_hash`` задают порядок файлов в паре.
+        ``delete_worse`` удаляет второй файл в той же операции, оставляя
+        в базе связь с лучшей версией.
+        """
+        if not self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT):
+            logger.warning('Отсутствует доступ "manage file relationships"')
+            return False
+        if not better_hash or not worse_hash or better_hash == worse_hash:
+            return False
+
+        payload: dict[str, object] = {
+            "hash_a": better_hash,
+            "hash_b": worse_hash,
+            "relationship": int(relationship),
+            "do_default_content_merge": merge_content,
+        }
+        if delete_worse:
+            payload["delete_b"] = True
+
+        self.client.set_file_relationships([payload])
+        return True
 
     def get_file_hash(self, file: str|os.PathLike|hydrus_api.BinaryFileLike) -> str|None:
         """Получение хэша файла

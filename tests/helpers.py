@@ -114,6 +114,7 @@ class FakeHydrusClient:
         self.cleaned_tags: list[str] = ["cleaned"]
         # Очередь ответов get_url_files для имитации асинхронного импорта
         self.url_file_statuses: dict[str, list[list[dict[str, Any]]]] = {}
+        self.duplicate_relationship_payloads: list[list[dict[str, Any]]] = []
         self.url_errors: dict[str, Exception] = {}
         self.add_url_errors: dict[str, Exception] = {}
         self.file_response = object()
@@ -135,7 +136,7 @@ class FakeHydrusClient:
         self.calls.append(("get_pages", None))
         return self.pages
 
-    def get_file_metadata(self, hashes):
+    def get_file_metadata(self, hashes, **kwargs):
         self.calls.append(("get_file_metadata", hashes))
         return {"metadata": [self.metadata[h] for h in hashes if h in self.metadata]}
 
@@ -168,6 +169,10 @@ class FakeHydrusClient:
     def add_file(self, file):
         self.calls.append(("add_file", file))
         return {"status": 1, "hash": "file_hash"}
+
+    def set_file_relationships(self, relationships):
+        self.calls.append(("set_file_relationships", relationships))
+        self.duplicate_relationship_payloads.append(relationships)
 
     def add_url(self, url, **kwargs):
         self.calls.append(("add_url", (url, kwargs)))
