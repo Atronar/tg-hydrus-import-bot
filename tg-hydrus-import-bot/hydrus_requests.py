@@ -17,6 +17,7 @@ from hydrus_api_enums import (
     AddedFileStatus,
     DuplicateRelationship,
     HydrusPermission,
+    PageType,
 )
 import hydrus_api_typing
 from media_info import is_exact_duplicate, probe_media
@@ -55,6 +56,7 @@ URL_IMPORT_MAX_DELAY = 15.0
 
 # Человекочитаемые названия статусов импорта Hydrus
 _ADDED_FILE_STATUS_NAMES = {
+    AddedFileStatus.UNKNOWN: "файл отсутствует, ссылка известна",
     AddedFileStatus.SUCCESSFULLY_IMPORTED: "успешно импортирован",
     AddedFileStatus.ALREADY_IN_DATABASE: "уже есть в базе",
     AddedFileStatus.PREVIOUSLY_DELETED: "ранее удалён",
@@ -380,6 +382,45 @@ class HydrusRequests:
             "note": note,
         }
 
+    def reimport_url(self, url: str) -> dict[str, object] | None:
+        """Запускает повторный импорт ссылки на новой странице Hydrus.
+
+        Если Hydrus помнит ссылку, но файла уже нет (status 0), обычный
+        ``add_url`` на существующую страницу не переобрабатывает её.
+        Новая страница URL-импорта заставляет Hydrus скачать ссылку заново.
+        """
+        if not url:
+            return None
+        if not self.check_permission(HydrusPermission.PAGES):
+            logger.warning('Отсутствует доступ "manage pages"')
+            return None
+
+        page_name = (
+            f"HC reimport {time.strftime('%Y%m%d-%H%M%S')}"
+            f"-{time.time_ns() % 1000000:06d}"
+        )
+        try:
+            response = self.client._api_request(
+                "POST",
+                "/manage_pages/new_page",
+                json={
+                    "page_type": int(PageType.URL_DOWNLOADER),
+                    "page_name": page_name,
+                    "urls": [url],
+                    "focus_page": False,
+                }
+            )
+            page_info = response.json()
+        except (AttributeError, hydrus_api.HydrusAPIException) as ex:
+            logger.warning(f"Не удалось создать страницу для {url}: {ex}")
+            return None
+
+        logger.info(
+            f"Ссылка {url} известна Hydrus, но файла нет; "
+            f"создана страница {page_name} для повторного импорта"
+        )
+        return page_info
+
     def _add_files_from_urls(
             self,
             urls: Iterable[str],
@@ -465,6 +506,7 @@ class HydrusRequests:
                 logger.warning(f"Не удалось проверить статус {url}: {ex}")
 
             should_poll = True
+            reimported = False
             if url_file_statuses:
                 status = url_file_statuses[0]
                 # К уже существующему файлу теги из add_url не доимпортируются
@@ -481,24 +523,37 @@ class HydrusRequests:
                 if status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE:
                     statuses[index] = status
                     should_poll = False
+                elif status.get("status") == AddedFileStatus.UNKNOWN:
+                    # Hydrus помнит ссылку, но файла уже нет. Обычный
+                    # add_url на существующую страницу её не переобработает,
+                    # поэтому создаём отдельную страницу импорта.
+                    page_info = self.reimport_url(url)
+                    if page_info:
+                        reimported = True
+                        page_name = page_info.get("page_name")
+                        if page_name:
+                            add_url_notes[index] = (
+                                f"создана страница {page_name}"
+                            )
 
             # Собственно, импорт, как в клиенте
-            try:
-                add_url_result = self.client.add_url(
-                    url,
-                    destination_page_name=page_name,
-                    service_keys_to_additional_tags=additional_tags
-                )
-                if isinstance(add_url_result, dict):
-                    result_text = add_url_result.get("human_result_text")
-                    if result_text:
-                        add_url_notes[index] = str(result_text)
-            except hydrus_api.HydrusAPIException as ex:
-                logger.error(f"Не удалось поставить в очередь {url}: {ex}")
-                # Если файл уже был в базе, его статус важнее ошибки add_url
-                if statuses[index] is None:
-                    statuses[index] = self._failed_status(ex)
-                    should_poll = False
+            if not reimported:
+                try:
+                    add_url_result = self.client.add_url(
+                        url,
+                        destination_page_name=page_name,
+                        service_keys_to_additional_tags=additional_tags
+                    )
+                    if isinstance(add_url_result, dict):
+                        result_text = add_url_result.get("human_result_text")
+                        if result_text:
+                            add_url_notes[index] = str(result_text)
+                except hydrus_api.HydrusAPIException as ex:
+                    logger.error(f"Не удалось поставить в очередь {url}: {ex}")
+                    # Если файл уже был в базе, его статус важнее ошибки add_url
+                    if statuses[index] is None:
+                        statuses[index] = self._failed_status(ex)
+                        should_poll = False
 
             if should_poll:
                 pending.append((index, url))
@@ -563,7 +618,7 @@ class HydrusRequests:
                     "Ссылка может быть ещё в очереди или отклонена."
                 )
                 if add_url_note := add_url_notes.get(index):
-                    note = f"{note} Ответ Hydrus: {add_url_note}"
+                    note = f"{note} Дополнительно: {add_url_note}"
                 statuses[index] = self._timeout_status(note)
         return unique_urls, statuses
 

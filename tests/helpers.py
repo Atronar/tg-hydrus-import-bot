@@ -118,6 +118,7 @@ class FakeHydrusClient:
         self.url_errors: dict[str, Exception] = {}
         self.add_url_errors: dict[str, Exception] = {}
         self.add_url_result: dict[str, str] | None = None
+        self.new_page_payloads: list[dict[str, Any]] = []
         self.file_response = object()
         self.calls: list[tuple[str, Any]] = []
 
@@ -153,8 +154,18 @@ class FakeHydrusClient:
         self.calls.append(("generate_hashes", path))
         return self.generated_hashes
 
-    def _api_request(self, method, path, data=None, headers=None):
+    def _api_request(self, method, path, data=None, headers=None, **kwargs):
         self.calls.append(("_api_request", (method, path, data, headers)))
+        if path == "/manage_pages/new_page":
+            payload = kwargs.get("json") or {}
+            self.new_page_payloads.append(payload)
+            return JsonResponse(
+                {
+                    "page_key": "new_page_key",
+                    "page_type": payload.get("page_type"),
+                    "page_name": payload.get("page_name", ""),
+                }
+            )
         return JsonResponse(self.generated_hashes)
 
     def clean_tags(self, tags):

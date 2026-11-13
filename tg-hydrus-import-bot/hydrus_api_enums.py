@@ -49,6 +49,8 @@ class AddedFileStatus(IntEnum):
     Поле status в ответе /add_files/add_file
     https://hydrusnetwork.github.io/hydrus/developer_api.html#add_files_add_file
     """
+    # Статус URL, у которого в базе есть хэш, но самого файла уже нет.
+    UNKNOWN = 0
     SUCCESSFULLY_IMPORTED = 1
     ALREADY_IN_DATABASE = 2
     PREVIOUSLY_DELETED = 3

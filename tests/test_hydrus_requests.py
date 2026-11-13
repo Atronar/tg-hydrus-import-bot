@@ -670,6 +670,50 @@ class UrlBatchImportTests(unittest.TestCase):
         self.assertEqual(result[1], ("u2", {"status": 2, "hash": "h2"}))
 
 
+class ReimportUrlTests(unittest.TestCase):
+    def test_creates_url_downloader_page(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus({HydrusPermission.PAGES}, client)
+
+        result = hydrus.reimport_url("https://example.com/post/1")
+
+        self.assertEqual(result["page_key"], "new_page_key")
+        self.assertEqual(len(client.new_page_payloads), 1)
+        payload = client.new_page_payloads[0]
+        self.assertEqual(payload["page_type"], 7)
+        self.assertEqual(payload["urls"], ["https://example.com/post/1"])
+        self.assertFalse(payload["focus_page"])
+
+    def test_without_pages_permission_returns_none(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus(set(), client)
+
+        self.assertIsNone(hydrus.reimport_url("https://example.com/post/1"))
+        self.assertEqual(client.new_page_payloads, [])
+
+    def test_unknown_url_status_forces_new_page(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "u1": [
+                [{"status": 0, "hash": "dead_hash"}],
+                [{"status": 2, "hash": "live_hash"}],
+            ],
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.URL_IMPORT_EDIT, HydrusPermission.PAGES},
+            client,
+        )
+
+        result = hydrus.add_files_from_urls(["u1"])
+
+        self.assertEqual(result, [{"status": 2, "hash": "live_hash"}])
+        self.assertEqual(len(client.new_page_payloads), 1)
+        self.assertNotIn(
+            "add_url",
+            [call[0] for call in client.calls],
+        )
+
+
 class CacheTests(unittest.TestCase):
     def test_tags_namespace_is_cached(self):
         client = FakeHydrusClient()
@@ -780,6 +824,12 @@ class ConvertResponseTests(unittest.TestCase):
         self.assertIn("не удалось импортировать (4)", result)
         self.assertIn("отклонён (7)", result)
         self.assertIn("ранее удалён (3)", result)
+
+    def test_reports_missing_file_status(self):
+        result = HydrusRequests.convert_import_resp_to_str(
+            [{"status": 0, "hash": "abc"}]
+        )
+        self.assertIn("файл отсутствует, ссылка известна (0)", result)
 
     def test_reports_unknown_status(self):
         result = HydrusRequests.convert_import_resp_to_str(
