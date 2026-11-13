@@ -17,4 +17,5 @@ ENV/
 *.pyproj
 
 .conf.json
+duplicate_domains.txt
 *.pyproj.user
