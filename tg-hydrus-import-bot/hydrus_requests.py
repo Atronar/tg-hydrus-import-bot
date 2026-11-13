@@ -371,6 +371,15 @@ class HydrusRequests:
             "note": str(ex),
         }
 
+    @staticmethod
+    def _timeout_status(note: str) -> hydrus_api_typing.AddedFile:
+        """Статус ссылки, по которой Hydrus не сообщил результат импорта."""
+        return {
+            "status": int(AddedFileStatus.FAILED_TO_IMPORT),
+            "hash": "",
+            "note": note,
+        }
+
     def _add_files_from_urls(
             self,
             urls: Iterable[str],
@@ -440,6 +449,7 @@ class HydrusRequests:
 
         statuses: list[hydrus_api_typing.AddedFile|None] = [None] * len(unique_urls)
         pending: list[tuple[int, str]] = []
+        add_url_notes: dict[int, str] = {}
 
         # Сначала ставим в очередь все ссылки, сохраняя их порядок
         for index, url in enumerate(unique_urls):
@@ -474,11 +484,15 @@ class HydrusRequests:
 
             # Собственно, импорт, как в клиенте
             try:
-                self.client.add_url(
+                add_url_result = self.client.add_url(
                     url,
                     destination_page_name=page_name,
                     service_keys_to_additional_tags=additional_tags
                 )
+                if isinstance(add_url_result, dict):
+                    result_text = add_url_result.get("human_result_text")
+                    if result_text:
+                        add_url_notes[index] = str(result_text)
             except hydrus_api.HydrusAPIException as ex:
                 logger.error(f"Не удалось поставить в очередь {url}: {ex}")
                 # Если файл уже был в базе, его статус важнее ошибки add_url
@@ -535,9 +549,22 @@ class HydrusRequests:
                 delay = min(delay * 1.5, URL_IMPORT_MAX_DELAY)
 
         if pending:
+            timeout = (
+                f"{URL_IMPORT_TIMEOUT:g}"
+                if isinstance(URL_IMPORT_TIMEOUT, float)
+                else str(URL_IMPORT_TIMEOUT)
+            )
             logger.warning(
                 f"Не дождались статуса импорта для {len(pending)} ссылок"
             )
+            for index, url in pending:
+                note = (
+                    f"{url}: Hydrus не сообщил статус импорта за {timeout} с. "
+                    "Ссылка может быть ещё в очереди или отклонена."
+                )
+                if add_url_note := add_url_notes.get(index):
+                    note = f"{note} Ответ Hydrus: {add_url_note}"
+                statuses[index] = self._timeout_status(note)
         return unique_urls, statuses
 
     def add_files_from_urls(

@@ -117,6 +117,7 @@ class FakeHydrusClient:
         self.duplicate_relationship_payloads: list[list[dict[str, Any]]] = []
         self.url_errors: dict[str, Exception] = {}
         self.add_url_errors: dict[str, Exception] = {}
+        self.add_url_result: dict[str, str] | None = None
         self.file_response = object()
         self.calls: list[tuple[str, Any]] = []
 
@@ -178,6 +179,7 @@ class FakeHydrusClient:
         self.calls.append(("add_url", (url, kwargs)))
         if error := self.add_url_errors.get(url):
             raise error
+        return self.add_url_result
 
     def get_url_files(self, url):
         self.calls.append(("get_url_files", url))

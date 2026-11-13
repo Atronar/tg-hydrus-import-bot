@@ -627,13 +627,24 @@ class UrlBatchImportTests(unittest.TestCase):
     def test_stops_polling_at_deadline(self):
         client = FakeHydrusClient()
         client.url_file_statuses = {"u1": [[]]}
+        client.add_url_result = {
+            "human_result_text": "URL added successfully."
+        }
         hydrus = make_hydrus({HydrusPermission.URL_IMPORT_EDIT}, client)
 
         with patch("hydrus_requests.URL_IMPORT_TIMEOUT", 0), \
                 patch("hydrus_requests.time.sleep"):
             result = hydrus.add_files_from_urls(["u1"])
 
-        self.assertEqual(result, [])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(
+            result[0]["status"],
+            int(AddedFileStatus.FAILED_TO_IMPORT),
+        )
+        self.assertEqual(result[0]["hash"], "")
+        self.assertIn("u1", result[0]["note"])
+        self.assertIn("не сообщил статус", result[0]["note"])
+        self.assertIn("URL added successfully.", result[0]["note"])
 
     def test_detailed_result_maps_url_to_status(self):
         client = FakeHydrusClient()
@@ -648,7 +659,15 @@ class UrlBatchImportTests(unittest.TestCase):
                 patch("hydrus_requests.time.sleep"):
             result = hydrus.add_files_from_urls_detailed(["u1", "u2"])
 
-        self.assertEqual(result, [("u2", {"status": 2, "hash": "h2"})])
+        self.assertEqual(len(result), 2)
+        timeout_url, timeout_status = result[0]
+        self.assertEqual(timeout_url, "u1")
+        self.assertEqual(
+            timeout_status["status"],
+            int(AddedFileStatus.FAILED_TO_IMPORT),
+        )
+        self.assertIn("не сообщил статус", timeout_status["note"])
+        self.assertEqual(result[1], ("u2", {"status": 2, "hash": "h2"}))
 
 
 class CacheTests(unittest.TestCase):
