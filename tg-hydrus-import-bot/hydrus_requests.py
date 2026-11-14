@@ -1,7 +1,6 @@
 ﻿"""
 Модуль связанный с запросами к Гидрусу
 """
-import io
 import ipaddress
 import os
 import tempfile
@@ -20,7 +19,7 @@ from hydrus_api_enums import (
     PageType,
 )
 import hydrus_api_typing
-from media_info import is_exact_duplicate, probe_media
+from media_info import is_exact_duplicate, is_image_mime, probe_media
 
 
 HYDRUS_TIMEOUT = (5.0, 60.0)
@@ -958,31 +957,6 @@ class HydrusRequests:
             return None
         return self.client.get_file(hash_=file_hash)
 
-    def get_file_hashes(
-        self,
-        file_hash: str
-    ) -> hydrus_api_typing.FileHashes | None:
-        """Считает хэши файла, уже загруженного в Hydrus.
-
-        Содержимое скачивается по точному хэшу (без подмены king), чтобы
-        проверить именно новый файл. Возвращает None, если файл недоступен.
-        """
-        response = self.get_file_bytes(file_hash)
-        if not response:
-            return None
-        try:
-            content = getattr(response, "content", None)
-            if content is None:
-                content = response.read()
-            return self.generate_hashes(io.BytesIO(content))
-        except hydrus_api.HydrusAPIException as ex:
-            logger.warning(f"Не удалось получить хэши {file_hash}: {ex}")
-            return None
-        finally:
-            close = getattr(response, "close", None)
-            if close:
-                close()
-
     def get_tags(
         self,
         file_hash: str,
@@ -1083,9 +1057,10 @@ class HydrusRequests:
         """Ищет точный дубликат файла, который уже есть в Hydrus.
 
         Сначала проверяется sha256: Hydrus сам считает такой файл
-        дубликатом. Затем ищутся кандидаты с перцептивным расстоянием 0
-        и сравниваются размеры/длительность. Найденному файлу сразу
-        добавляются теги, повторный импорт не выполняется.
+        дубликатом. Для изображений затем ищутся кандидаты с перцептивным
+        расстоянием 0 и сравниваются размеры. Для остальных файлов
+        перцептивного поиска нет: используется только sha256. Найденному
+        файлу сразу добавляются теги, повторный импорт не выполняется.
         """
         hashes = self.generate_hashes(file)
         file_hash = hashes.get('hash')
@@ -1097,6 +1072,9 @@ class HydrusRequests:
                     "hash": main_hash,
                     "note": "точный дубликат уже есть в базе",
                 }
+
+        if not is_image_mime(mime):
+            return None
 
         perceptual_hashes = hashes.get('perceptual_hashes') or []
         if not perceptual_hashes:
@@ -1135,7 +1113,8 @@ class HydrusRequests:
         дубликата, ``{"kind": "near", "distance": ..., "hashes": ...,
         "new_info": MediaInfo}`` для похожего файла и ``{"kind": "none"}``.
         Точный дубликат не импортируется, теги сразу добавляются
-        существующему файлу.
+        существующему файлу. Перцептивный поиск выполняется только для
+        изображений; для остальных файлов проверяется только sha256.
         """
         try:
             hashes = self.generate_hashes(file)
@@ -1158,6 +1137,9 @@ class HydrusRequests:
                     }
         except hydrus_api.HydrusAPIException as ex:
             logger.warning(f"Не удалось проверить sha256 файла: {ex}")
+
+        if not is_image_mime(mime):
+            return {"kind": "none"}
 
         perceptual_hashes = hashes.get("perceptual_hashes") or []
         if not perceptual_hashes:
@@ -1215,28 +1197,23 @@ class HydrusRequests:
         new_hash: str,
         max_distance: int
     ) -> dict[str, object] | None:
-        """Ищет похожие файлы для только что импортированной ссылки.
+        """Ищет похожие файлы для только что добавленного в Гидрус файла по хэшу sha256.
 
-        Сначала проверяется перцептивное расстояние 0 (точный дубликат),
-        затем — расстояние до ``max_distance``. Возвращает словарь
-        ``{"distance": int, "hashes": list[str]}`` или None.
+        Файл уже добавлен в Hydrus, поэтому используется поиск по его
+        хэшу: Hydrus сам возьмёт сохранённый нужный хэш, скачивать
+        содержимое не нужно. Сначала проверяется расстояние 0 (точный
+        дубликат), затем — расстояние до ``max_distance``. Возвращает
+        словарь ``{"distance": int, "hashes": list[str]}`` или None.
+
+        На данный момент в самом Гидрусе для не-изображений
+        перцептивный поиск не реализован и здесь он вернёт им лишь
+        точные копии, но мы не можем исключать появления подобного
+        механизма в Гидрусе в будущем.
         """
-        # Перцептивные дубликаты имеют смысл только для изображений.
-        # Видео и документы не скачиваем целиком ради проверки.
         try:
             info = self.get_file_info(new_hash)
         except hydrus_api.HydrusAPIException as ex:
             logger.warning(f"Не удалось получить тип файла {new_hash}: {ex}")
-            return None
-        mime = str((info or {}).get("mime") or "")
-        if not mime.startswith("image/"):
-            return None
-
-        hashes = self.get_file_hashes(new_hash)
-        if not hashes:
-            return None
-        perceptual_hashes = hashes.get("perceptual_hashes") or []
-        if not perceptual_hashes:
             return None
 
         # Исключаем сам файл и его king: Hydrus может вернуть их в выдаче.
@@ -1245,8 +1222,8 @@ class HydrusRequests:
             excluded.add(main_hash)
 
         try:
-            exact = self.find_similar_files(
-                perceptual_hashes,
+            exact = self.find_similar_files_by_hash(
+                new_hash,
                 0,
                 exclude_hashes=excluded
             )
@@ -1255,8 +1232,8 @@ class HydrusRequests:
 
             if max_distance <= 0:
                 return None
-            similar = self.find_similar_files(
-                perceptual_hashes,
+            similar = self.find_similar_files_by_hash(
+                new_hash,
                 max_distance,
                 exclude_hashes=excluded
             )
@@ -1352,6 +1329,34 @@ class HydrusRequests:
         result["action"] = action
         return result
 
+    def _has_search_permissions(self) -> bool:
+        if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH):
+            logger.warning('Отсутствует доступ "search and fetch files"')
+            return False
+        if not self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT):
+            logger.warning('Отсутствует доступ "manage file relationships"')
+            return False
+        return True
+
+    def _filter_local_kings(
+        self,
+        found_hashes: Iterable[str],
+        exclude_hashes: Iterable[str] | None = None
+    ) -> list[str]:
+        """Оставляет локальные king-файлы без повторов и исключённых хэшей."""
+        excluded = set(exclude_hashes or ())
+        result: list[str] = []
+        for found_hash in found_hashes:
+            main_hash = self.get_main_file_hash(found_hash)
+            if (
+                main_hash
+                and main_hash not in result
+                and main_hash not in excluded
+                and self._is_local_file(main_hash)
+            ):
+                result.append(main_hash)
+        return result
+
     def find_similar_files(
         self,
         perceptual_hashes: Iterable[str],
@@ -1361,19 +1366,16 @@ class HydrusRequests:
     ) -> list[str]:
         """Ищет локальные файлы с похожими перцептивными хэшами.
 
-        Возвращает хэши king-файлов в порядке, который вернул Hydrus.
-        Дубликаты и нелокальные записи отфильтровываются.
-        ``exclude_hashes`` позволяет не возвращать сам импортируемый файл.
+        Используется до добавления файла в Hydrus: перцептивные хэши
+        передаются в запрос ``system:similar to data``. Возвращает хэши
+        king-файлов в порядке, который вернул Hydrus. Дубликаты и
+        нелокальные записи отфильтровываются. ``exclude_hashes``
+        позволяет не возвращать сам импортируемый файл.
         """
-        excluded = set(exclude_hashes or ())
         hashes = [file_hash for file_hash in perceptual_hashes if file_hash]
         if not hashes:
             return []
-        if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH):
-            logger.warning('Отсутствует доступ "search and fetch files"')
-            return []
-        if not self.check_permission(HydrusPermission.RELATIONSHIPS_EDIT):
-            logger.warning('Отсутствует доступ "manage file relationships"')
+        if not self._has_search_permissions():
             return []
 
         query = (
@@ -1386,18 +1388,37 @@ class HydrusRequests:
                 return_hashes=True
             ).get('hashes', [])
         )
+        return self._filter_local_kings(found_hashes, exclude_hashes)
 
-        result: list[str] = []
-        for found_hash in found_hashes:
-            main_hash = self.get_main_file_hash(found_hash)
-            if (
-                main_hash
-                and main_hash not in result
-                and main_hash not in excluded
-                and self._is_local_file(main_hash)
-            ):
-                result.append(main_hash)
-        return result
+    def find_similar_files_by_hash(
+        self,
+        file_hash: str,
+        max_distance: int,
+        *,
+        exclude_hashes: Iterable[str]|None = None
+    ) -> list[str]:
+        """Ищет похожие файлы по sha256-хэшу уже добавленного файла.
+
+        Hydrus использует сохранённый перцептивный хэш, поэтому
+        содержимое не скачивается. Возвращает sha256-хэши king-файлов без
+        повторов и нелокальных записей.
+        """
+        if not file_hash:
+            return []
+        if not self._has_search_permissions():
+            return []
+
+        query = (
+            f"system:similar to {file_hash} "
+            f"distance {max(0, max_distance)}"
+        )
+        found_hashes: list[str] = (
+            self.client.search_files(
+                [query],
+                return_hashes=True
+            ).get('hashes', [])
+        )
+        return self._filter_local_kings(found_hashes, exclude_hashes)
 
     def get_file_info(self, file_hash: str) -> dict[str, object] | None:
         """Возвращает метаданные файла, включая известные ссылки."""

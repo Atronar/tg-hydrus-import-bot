@@ -3,7 +3,12 @@ import unittest
 
 from PIL import Image
 
-from media_info import MediaInfo, is_exact_duplicate, probe_media
+from media_info import (
+    MediaInfo,
+    is_exact_duplicate,
+    is_image_mime,
+    probe_media,
+)
 
 
 def make_image(width: int = 100, height: int = 80) -> BytesIO:
@@ -39,6 +44,20 @@ class ProbeMediaTests(unittest.TestCase):
 
         self.assertEqual(info.kind, "audio")
         self.assertEqual(info.size, len(b"audio"))
+
+
+class ImageMimeTests(unittest.TestCase):
+    def test_image_types_are_images(self):
+        self.assertTrue(is_image_mime("image/png"))
+        self.assertTrue(is_image_mime("image/png; charset=binary"))
+        self.assertTrue(is_image_mime("IMAGE/JPEG"))
+
+    def test_other_types_are_not_images(self):
+        self.assertFalse(is_image_mime("video/mp4"))
+        self.assertFalse(is_image_mime("audio/mpeg"))
+        self.assertFalse(is_image_mime("application/pdf"))
+        self.assertFalse(is_image_mime(""))
+        self.assertFalse(is_image_mime(None))
 
 
 class ExactDuplicateTests(unittest.TestCase):

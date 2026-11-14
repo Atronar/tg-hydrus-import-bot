@@ -63,6 +63,16 @@ def _kind_from_mime(mime: str | None) -> MediaKind | None:
     return None
 
 
+def is_image_mime(mime: str | None) -> bool:
+    """Считает файл изображением по MIME-типу.
+
+    Опираться на список форматов Hydrus нельзя: бот работает с более
+    широким набором изображений. Для всего, что не ``image/*``,
+    перцептивный поиск не применяется.
+    """
+    return _kind_from_mime(mime) == "image"
+
+
 def _probe_image(source: str | os.PathLike | object) -> tuple[int, int] | None:
     try:
         with Image.open(source) as image:

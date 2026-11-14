@@ -20,7 +20,7 @@ from hydrus_requests import (
     InsecureApiUrlError,
     _TimeoutSession,
 )
-from tests.helpers import FakeHydrusClient, FakeResponse, make_hydrus
+from tests.helpers import FakeHydrusClient, make_hydrus
 
 
 ALL_PERMISSIONS = {
@@ -1002,6 +1002,81 @@ class FindSimilarFilesTests(unittest.TestCase):
         )
 
 
+class FindSimilarFilesByHashTests(unittest.TestCase):
+    def setUp(self):
+        self.client = FakeHydrusClient()
+        self.hydrus = make_hydrus(
+            {
+                HydrusPermission.FILES_SEARCH_FETCH,
+                HydrusPermission.RELATIONSHIPS_EDIT,
+            },
+            self.client,
+        )
+
+    def test_builds_query_and_filters_candidates(self):
+        self.client.search_hashes = ["h1", "h2", "h1"]
+        self.client.relationships = {
+            "h1": {"king": "k1", "king_is_local": True},
+            "h2": {"king": "k2", "king_is_local": True},
+        }
+        self.client.metadata = {
+            "k1": {"is_local": True},
+            "k2": {"is_local": True},
+        }
+
+        result = self.hydrus.find_similar_files_by_hash("new", 5)
+
+        self.assertEqual(result, ["k1", "k2"])
+        self.assertIn(
+            (
+                "search_files",
+                (["system:similar to new distance 5"], True),
+            ),
+            self.client.calls,
+        )
+
+    def test_without_permissions_returns_empty(self):
+        self.hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH}, self.client
+        )
+        self.client.search_hashes = ["h1"]
+
+        self.assertEqual(
+            self.hydrus.find_similar_files_by_hash("new", 5), []
+        )
+        self.assertNotIn(
+            "search_files",
+            [call[0] for call in self.client.calls],
+        )
+
+    def test_empty_hash_returns_empty(self):
+        self.assertEqual(
+            self.hydrus.find_similar_files_by_hash("", 5), []
+        )
+        self.assertNotIn(
+            "search_files",
+            [call[0] for call in self.client.calls],
+        )
+
+    def test_excludes_given_hashes(self):
+        self.client.search_hashes = ["h1", "h2"]
+        self.client.relationships = {
+            "h1": {"king": "k1", "king_is_local": True},
+            "h2": {"king": "k2", "king_is_local": True},
+        }
+        self.client.metadata = {
+            "k1": {"is_local": True},
+            "k2": {"is_local": True},
+        }
+
+        self.assertEqual(
+            self.hydrus.find_similar_files_by_hash(
+                "new", 5, exclude_hashes=["k1"]
+            ),
+            ["k2"],
+        )
+
+
 class GetFileInfoTests(unittest.TestCase):
     def test_returns_metadata(self):
         client = FakeHydrusClient()
@@ -1247,6 +1322,22 @@ class FindExactDuplicateTests(unittest.TestCase):
             )
         )
 
+    def test_non_image_skips_perceptual_search(self):
+        self.client.generated_hashes = {
+            "hash": "new",
+            "perceptual_hashes": ["perceptual"],
+        }
+
+        self.assertIsNone(
+            self.hydrus.find_exact_duplicate(
+                BytesIO(b"data"), mime="video/mp4"
+            )
+        )
+        self.assertNotIn(
+            "search_files",
+            [call[0] for call in self.client.calls],
+        )
+
 
 class FindUploadDuplicateTests(unittest.TestCase):
     def setUp(self):
@@ -1362,39 +1453,26 @@ class FindUploadDuplicateTests(unittest.TestCase):
             "none",
         )
 
-
-class GetFileHashesTests(unittest.TestCase):
-    def test_reads_content_and_closes_response(self):
-        client = FakeHydrusClient()
-        response = FakeResponse(content=b"data")
-        client.file_response = response
-        client.generated_hashes = {
-            "hash": "h",
+    def test_non_image_skips_perceptual_search(self):
+        self.client.generated_hashes = {
+            "hash": "new",
             "perceptual_hashes": ["p"],
         }
-        hydrus = make_hydrus(
-            {HydrusPermission.FILES_SEARCH_FETCH}, client
+
+        result = self.hydrus.find_upload_duplicate(
+            BytesIO(b"data"), mime="application/pdf"
         )
 
-        self.assertEqual(
-            hydrus.get_file_hashes("h"),
-            {"hash": "h", "perceptual_hashes": ["p"]},
+        self.assertEqual(result["kind"], "none")
+        self.assertNotIn(
+            "search_files",
+            [call[0] for call in self.client.calls],
         )
-        self.assertTrue(response.closed)
-        self.assertIn("_api_request", [call[0] for call in client.calls])
-
-    def test_without_permission_returns_none(self):
-        client = FakeHydrusClient()
-        hydrus = make_hydrus(set(), client)
-
-        self.assertIsNone(hydrus.get_file_hashes("h"))
-        self.assertNotIn(("get_file", "h"), client.calls)
 
 
 class FindUrlDuplicatesTests(unittest.TestCase):
     def setUp(self):
         self.client = FakeHydrusClient()
-        self.client.file_response = FakeResponse(content=b"data")
         self.hydrus = make_hydrus(
             {
                 HydrusPermission.FILES_SEARCH_FETCH,
@@ -1403,11 +1481,7 @@ class FindUrlDuplicatesTests(unittest.TestCase):
             self.client,
         )
 
-    def test_returns_exact_candidate(self):
-        self.client.generated_hashes = {
-            "hash": "new",
-            "perceptual_hashes": ["p"],
-        }
+    def test_returns_exact_candidate_by_hash(self):
         self.client.search_hashes = ["candidate"]
         self.client.relationships = {
             "candidate": {"king": "existing", "king_is_local": True}
@@ -1421,12 +1495,16 @@ class FindUrlDuplicatesTests(unittest.TestCase):
             self.hydrus.find_url_duplicates("new", 5),
             {"distance": 0, "hashes": ["existing"]},
         )
+        self.assertIn(
+            (
+                "search_files",
+                (["system:similar to new distance 0"], True),
+            ),
+            self.client.calls,
+        )
+        self.assertNotIn(("get_file", "new"), self.client.calls)
 
     def test_returns_similar_candidate_when_no_exact(self):
-        self.client.generated_hashes = {
-            "hash": "new",
-            "perceptual_hashes": ["p"],
-        }
         self.client.relationships = {}
         self.client.metadata = {
             "new": {"is_local": True, "mime": "image/png"},
@@ -1435,21 +1513,13 @@ class FindUrlDuplicatesTests(unittest.TestCase):
 
         with patch.object(
             self.hydrus,
-            "find_similar_files",
+            "find_similar_files_by_hash",
             side_effect=[[], ["candidate"]],
         ):
             self.assertEqual(
                 self.hydrus.find_url_duplicates("new", 5),
                 {"distance": 5, "hashes": ["candidate"]},
             )
-
-    def test_without_perceptual_hashes_returns_none(self):
-        self.client.generated_hashes = {"hash": "new"}
-        self.client.metadata = {
-            "new": {"is_local": True, "mime": "image/png"},
-        }
-
-        self.assertIsNone(self.hydrus.find_url_duplicates("new", 5))
 
     def test_non_image_is_not_checked(self):
         self.client.metadata = {
@@ -1458,6 +1528,10 @@ class FindUrlDuplicatesTests(unittest.TestCase):
 
         self.assertIsNone(self.hydrus.find_url_duplicates("new", 5))
         self.assertNotIn(("get_file", "new"), self.client.calls)
+        self.assertNotIn(
+            "search_files",
+            [call[0] for call in self.client.calls],
+        )
 
 
 class ResolveUrlDuplicateTests(unittest.TestCase):
