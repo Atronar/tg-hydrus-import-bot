@@ -230,10 +230,20 @@ async def import_urls_with_duplicates(
         resp.append(status)
         file_hash = status.get("hash") or ""
         status_code = status.get("status")
-        if (
+        # get_url_files отвечает статусом 2 для любого файла, уже
+        # находящегося в базе, в том числе только что импортированного.
+        # Статусы, полученные при опросе после add_url или повторного
+        # импорта, помечены _imported_now: для них проверяем дубликаты.
+        # Предварительный статус 2 означает, что файл был в базе до
+        # импорта, и проверка не нужна.
+        needs_duplicate_check = (
             status_code == int(AddedFileStatus.SUCCESSFULLY_IMPORTED)
-            and file_hash
-        ):
+            or (
+                status_code == int(AddedFileStatus.ALREADY_IN_DATABASE)
+                and bool(status.get("_imported_now"))
+            )
+        )
+        if needs_duplicate_check and file_hash:
             duplicate = await run_hydrus(
                 hydrus.find_url_duplicates,
                 file_hash,

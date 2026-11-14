@@ -584,6 +584,12 @@ class HydrusRequests:
                     if status.get("status") == AddedFileStatus.UNKNOWN:
                         still_pending.append((index, url))
                         continue
+                    # get_url_files возвращает статус 2 для любого файла,
+                    # уже находящегося в базе, в том числе только что
+                    # импортированного. Помечаем статусы, полученные после
+                    # нашей попытки импорта, чтобы вызывающий код проверил
+                    # перцептивные дубликаты.
+                    status = {**status, "_imported_now": True}
                     statuses[index] = status
                     # Ссылка могла стать известной уже после add_url
                     if (
@@ -861,6 +867,9 @@ class HydrusRequests:
         for resp_item in resp:
             parts: list[str] = []
             for key, value in resp_item.items():
+                # Служебные поля не показываем пользователю.
+                if key.startswith("_"):
+                    continue
                 if key != "status":
                     parts.append(f"{key}: {value}")
                     continue
@@ -1197,25 +1206,20 @@ class HydrusRequests:
         new_hash: str,
         max_distance: int
     ) -> dict[str, object] | None:
-        """Ищет похожие файлы для только что добавленного в Гидрус файла по хэшу sha256.
+        """Ищет похожие файлы для только что добавленного в Гидрус файла.
 
         Файл уже добавлен в Hydrus, поэтому используется поиск по его
-        хэшу: Hydrus сам возьмёт сохранённый нужный хэш, скачивать
-        содержимое не нужно. Сначала проверяется расстояние 0 (точный
-        дубликат), затем — расстояние до ``max_distance``. Возвращает
-        словарь ``{"distance": int, "hashes": list[str]}`` или None.
+        хэшу sha256: Hydrus сам возьмёт сохранённый нужный хэш,
+        скачивать содержимое не нужно. Сначала проверяется расстояние 0
+        (точный дубликат), затем — расстояние до ``max_distance``.
+        Возвращает словарь ``{"distance": int, "hashes": list[str]}``
+        или None.
 
         На данный момент в самом Гидрусе для не-изображений
         перцептивный поиск не реализован и здесь он вернёт им лишь
         точные копии, но мы не можем исключать появления подобного
         механизма в Гидрусе в будущем.
         """
-        try:
-            info = self.get_file_info(new_hash)
-        except hydrus_api.HydrusAPIException as ex:
-            logger.warning(f"Не удалось получить тип файла {new_hash}: {ex}")
-            return None
-
         # Исключаем сам файл и его king: Hydrus может вернуть их в выдаче.
         excluded = {new_hash}
         if main_hash := self.get_main_file_hash(new_hash):

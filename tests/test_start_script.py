@@ -367,6 +367,69 @@ class ImportUrlsWithDuplicatesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(send_hashes, ["existing"])
         hydrus.find_url_duplicates.assert_not_called()
 
+    async def test_imported_existing_file_is_checked(self):
+        """status 2 после импорта — это файл, только что попавший в базу."""
+        hydrus = self._hydrus([
+            (
+                "https://example.com/a",
+                {
+                    "status": 2,
+                    "hash": "new",
+                    "note": "",
+                    "_imported_now": True,
+                },
+            )
+        ])
+        with patch("start_script.run_hydrus", new=self._run_hydrus):
+            resp, send_hashes = await import_urls_with_duplicates(
+                hydrus,
+                ["https://example.com/a"],
+                tags=["tag"],
+                priority_domains=set(),
+                pending_prompts=[],
+            )
+
+        self.assertEqual(resp[0]["status"], 2)
+        self.assertEqual(send_hashes, ["new"])
+        hydrus.find_url_duplicates.assert_called_once()
+        self.assertEqual(
+            hydrus.find_url_duplicates.call_args.args[0],
+            "new",
+        )
+
+    async def test_imported_duplicate_is_prompted(self):
+        hydrus = self._hydrus([
+            (
+                "https://example.com/a",
+                {
+                    "status": 2,
+                    "hash": "new",
+                    "note": "",
+                    "_imported_now": True,
+                },
+            )
+        ])
+        hydrus.find_url_duplicates.return_value = {
+            "distance": 0,
+            "hashes": ["existing"],
+        }
+        hydrus.resolve_url_duplicate.return_value = {"action": "pending"}
+        pending_prompts: list[dict] = []
+        with patch("start_script.run_hydrus", new=self._run_hydrus):
+            resp, send_hashes = await import_urls_with_duplicates(
+                hydrus,
+                ["https://example.com/a"],
+                tags=["tag"],
+                priority_domains=set(),
+                pending_prompts=pending_prompts,
+            )
+
+        self.assertEqual(resp[0]["status"], 2)
+        self.assertEqual(send_hashes, [])
+        self.assertEqual(len(pending_prompts), 1)
+        self.assertEqual(pending_prompts[0]["existing_hash"], "existing")
+        self.assertEqual(len(_PENDING_DUPLICATES), 1)
+
     async def test_pending_duplicate_is_not_sent_and_prompted(self):
         hydrus = self._hydrus([
             ("https://example.com/a", {"status": 1, "hash": "new", "note": ""})
@@ -393,8 +456,8 @@ class ImportUrlsWithDuplicatesTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("похож", resp[0]["note"])
         self.assertEqual(len(_PENDING_DUPLICATES), 1)
 
-    async def test_unknown_status_then_new_file_is_checked(self):
-        """После status 0 и повторного импорта новый файл проверяется."""
+    async def test_status_1_is_checked(self):
+        """status 1 проверяется, если Hydrus его вернёт."""
         client = FakeHydrusClient()
         client.url_file_statuses = {
             "https://example.com/a": [
@@ -432,6 +495,82 @@ class ImportUrlsWithDuplicatesTests(unittest.IsolatedAsyncioTestCase):
             "new_hash",
         )
         self.assertEqual(len(client.new_page_payloads), 1)
+
+    async def test_unknown_status_then_existing_status_is_checked(self):
+        """status 0 -> 2 после повторного импорта тоже проверяется."""
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "https://example.com/a": [
+                [{"status": 0, "hash": "dead_hash"}],
+                [{"status": 2, "hash": "new_hash"}],
+            ],
+        }
+        hydrus = make_hydrus(
+            {
+                HydrusPermission.URL_IMPORT_EDIT,
+                HydrusPermission.PAGES,
+            },
+            client,
+        )
+        hydrus.find_url_duplicates = Mock(return_value=None)
+
+        with (
+            patch("start_script.run_hydrus", new=self._run_hydrus),
+            patch("hydrus_requests.time.sleep"),
+        ):
+            resp, send_hashes = await import_urls_with_duplicates(
+                hydrus,
+                ["https://example.com/a"],
+                tags=[],
+                priority_domains=set(),
+                pending_prompts=[],
+            )
+
+        self.assertEqual(resp[0]["status"], 2)
+        self.assertEqual(resp[0]["hash"], "new_hash")
+        self.assertEqual(send_hashes, ["new_hash"])
+        hydrus.find_url_duplicates.assert_called_once()
+        self.assertEqual(
+            hydrus.find_url_duplicates.call_args.args[0],
+            "new_hash",
+        )
+        self.assertEqual(len(client.new_page_payloads), 1)
+
+    async def test_added_file_status_2_is_checked(self):
+        """status 2 после обычного add_url тоже проверяется."""
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "https://example.com/a": [
+                [],
+                [{"status": 2, "hash": "new_hash"}],
+            ],
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.URL_IMPORT_EDIT},
+            client,
+        )
+        hydrus.find_url_duplicates = Mock(return_value=None)
+
+        with (
+            patch("start_script.run_hydrus", new=self._run_hydrus),
+            patch("hydrus_requests.time.sleep"),
+        ):
+            resp, send_hashes = await import_urls_with_duplicates(
+                hydrus,
+                ["https://example.com/a"],
+                tags=[],
+                priority_domains=set(),
+                pending_prompts=[],
+            )
+
+        self.assertEqual(resp[0]["status"], 2)
+        self.assertEqual(send_hashes, ["new_hash"])
+        hydrus.find_url_duplicates.assert_called_once()
+        self.assertEqual(
+            hydrus.find_url_duplicates.call_args.args[0],
+            "new_hash",
+        )
+        self.assertEqual(client.new_page_payloads, [])
 
 
 class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):

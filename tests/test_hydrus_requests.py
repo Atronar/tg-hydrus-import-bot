@@ -618,7 +618,10 @@ class UrlBatchImportTests(unittest.TestCase):
         with patch("hydrus_requests.time.sleep"):
             result = hydrus.add_files_from_urls(["u1"], tags=["tag"])
 
-        self.assertEqual(result, [{"status": 2, "hash": "h1"}])
+        self.assertEqual(
+            result,
+            [{"status": 2, "hash": "h1", "_imported_now": True}],
+        )
         self.assertIn(
             ("add_tags", (["h1"], {"tag_service_key": ["cleaned"]})),
             client.calls,
@@ -709,7 +712,10 @@ class ReimportUrlTests(unittest.TestCase):
 
         result = hydrus.add_files_from_urls(["u1"])
 
-        self.assertEqual(result, [{"status": 2, "hash": "live_hash"}])
+        self.assertEqual(
+            result,
+            [{"status": 2, "hash": "live_hash", "_imported_now": True}],
+        )
         self.assertEqual(len(client.new_page_payloads), 1)
         self.assertNotIn(
             "add_url",
@@ -732,7 +738,10 @@ class ReimportUrlTests(unittest.TestCase):
         with patch("hydrus_requests.time.sleep"):
             result = hydrus.add_files_from_urls(["u1", "u2"])
 
-        self.assertEqual(result[0], {"status": 2, "hash": "live_hash"})
+        self.assertEqual(
+            result[0],
+            {"status": 2, "hash": "live_hash", "_imported_now": True},
+        )
         add_url_calls = [
             call for call in client.calls if call[0] == "add_url"
         ]
@@ -740,6 +749,42 @@ class ReimportUrlTests(unittest.TestCase):
         url, kwargs = add_url_calls[0][1]
         self.assertEqual(url, "u2")
         self.assertEqual(kwargs["destination_page_name"], "test page")
+
+    def test_precheck_status_is_not_marked_as_imported(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "u1": [[{"status": 2, "hash": "live_hash"}]],
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.URL_IMPORT_EDIT, HydrusPermission.PAGES},
+            client,
+        )
+
+        result = hydrus.add_files_from_urls_detailed(["u1"])
+
+        self.assertEqual(result[0][1], {"status": 2, "hash": "live_hash"})
+        self.assertNotIn("_imported_now", result[0][1])
+
+    def test_add_url_status_is_marked_as_imported(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "u1": [
+                [],
+                [{"status": 2, "hash": "new_hash"}],
+            ],
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.URL_IMPORT_EDIT, HydrusPermission.PAGES},
+            client,
+        )
+
+        with patch("hydrus_requests.time.sleep"):
+            result = hydrus.add_files_from_urls_detailed(["u1"])
+
+        self.assertEqual(
+            result,
+            [("u1", {"status": 2, "hash": "new_hash", "_imported_now": True})],
+        )
 
 
 class CacheTests(unittest.TestCase):
@@ -864,6 +909,13 @@ class ConvertResponseTests(unittest.TestCase):
             [{"status": 99, "hash": "abc"}]
         )
         self.assertIn("status: неизвестный статус 99", result)
+
+    def test_hides_service_fields(self):
+        result = HydrusRequests.convert_import_resp_to_str(
+            [{"status": 2, "hash": "abc", "_imported_now": True}]
+        )
+        self.assertNotIn("_imported_now", result)
+        self.assertIn("hash: abc", result)
 
 
 class TimeoutSessionTests(unittest.TestCase):
@@ -1487,7 +1539,6 @@ class FindUrlDuplicatesTests(unittest.TestCase):
             "candidate": {"king": "existing", "king_is_local": True}
         }
         self.client.metadata = {
-            "new": {"is_local": True, "mime": "image/png"},
             "existing": {"is_local": True},
         }
 
@@ -1506,10 +1557,6 @@ class FindUrlDuplicatesTests(unittest.TestCase):
 
     def test_returns_similar_candidate_when_no_exact(self):
         self.client.relationships = {}
-        self.client.metadata = {
-            "new": {"is_local": True, "mime": "image/png"},
-            "candidate": {"is_local": True},
-        }
 
         with patch.object(
             self.hydrus,
@@ -1521,17 +1568,18 @@ class FindUrlDuplicatesTests(unittest.TestCase):
                 {"distance": 5, "hashes": ["candidate"]},
             )
 
-    def test_non_image_is_not_checked(self):
-        self.client.metadata = {
-            "new": {"is_local": True, "mime": "video/mp4"},
-        }
+    def test_non_image_uses_hash_search_without_download(self):
+        self.client.search_hashes = []
 
-        self.assertIsNone(self.hydrus.find_url_duplicates("new", 5))
-        self.assertNotIn(("get_file", "new"), self.client.calls)
-        self.assertNotIn(
-            "search_files",
-            [call[0] for call in self.client.calls],
+        self.assertIsNone(self.hydrus.find_url_duplicates("new", 0))
+        self.assertIn(
+            (
+                "search_files",
+                (["system:similar to new distance 0"], True),
+            ),
+            self.client.calls,
         )
+        self.assertNotIn(("get_file", "new"), self.client.calls)
 
 
 class ResolveUrlDuplicateTests(unittest.TestCase):
