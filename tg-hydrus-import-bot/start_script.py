@@ -203,6 +203,126 @@ async def import_file_or_prompt(
     ), False
 
 
+async def import_urls_with_duplicates(
+    hydrus: HydrusRequests,
+    urls: list[str],
+    *,
+    tags: list[str] | None,
+    priority_domains: frozenset[str] | set[str],
+    pending_prompts: list[dict]
+) -> tuple[list[dict], list[str]]:
+    """Импортирует ссылки и проверяет перцептивные дубликаты.
+
+    Возвращает статусы для ответа и хэши, содержимое которых нужно
+    отправить в Telegram. Одинаково используется для текста, подписей
+    к медиа и источников SauceNAO, чтобы импорт по ссылке не отличался.
+    """
+    resp: list[dict] = []
+    send_hashes: list[str] = []
+    pending_new_hashes: set[str] = set()
+    tag_list = list(tags or [])
+
+    for url, status in await run_hydrus(
+        hydrus.add_files_from_urls_detailed,
+        urls,
+        tags=tag_list
+    ):
+        resp.append(status)
+        file_hash = status.get("hash") or ""
+        status_code = status.get("status")
+        if (
+            status_code == int(AddedFileStatus.SUCCESSFULLY_IMPORTED)
+            and file_hash
+        ):
+            duplicate = await run_hydrus(
+                hydrus.find_url_duplicates,
+                file_hash,
+                CONF.DUPLICATE_MAX_DISTANCE
+            )
+            if duplicate:
+                resolved = None
+                candidate_hashes = list(duplicate.get("hashes", []))
+                for candidate_hash in candidate_hashes:
+                    result = await run_hydrus(
+                        hydrus.resolve_url_duplicate,
+                        url,
+                        file_hash,
+                        candidate_hash,
+                        distance=int(duplicate.get("distance", 0)),
+                        priority_domains=priority_domains,
+                        tags=tag_list
+                    )
+                    if result.get("action") != "pending":
+                        resolved = result
+                        break
+                if resolved:
+                    if resolved.get("action") == "kept_existing":
+                        file_hash = str(resolved.get("existing_hash") or "")
+                        resp[-1] = {
+                            "status": int(
+                                AddedFileStatus.ALREADY_IN_DATABASE
+                            ),
+                            "hash": file_hash,
+                            "note": (
+                                "оставлен существующий файл, "
+                                "новая копия удалена"
+                            ),
+                        }
+                    elif resolved.get("action") == "kept_new":
+                        resp[-1] = {
+                            "status": int(
+                                AddedFileStatus.SUCCESSFULLY_IMPORTED
+                            ),
+                            "hash": file_hash,
+                            "note": (
+                                "оставлен новый файл, "
+                                "существующая копия удалена"
+                            ),
+                        }
+                elif candidate_hashes:
+                    candidate_hash = candidate_hashes[0]
+                    distance = int(duplicate.get("distance", 0))
+                    existing_info = await run_hydrus(
+                        hydrus.get_file_info,
+                        candidate_hash
+                    )
+                    new_info = await run_hydrus(
+                        hydrus.get_file_info,
+                        file_hash
+                    )
+                    pending = {
+                        "url": url,
+                        "new_hash": file_hash,
+                        "existing_hash": candidate_hash,
+                        "distance": distance,
+                        "tags": list(tag_list),
+                        "existing_info": existing_info,
+                        "new_info": new_info,
+                    }
+                    token = _store_pending_duplicate(pending)
+                    pending_prompts.append({**pending, "token": token})
+                    pending_new_hashes.add(file_hash)
+                    resp[-1] = {
+                        **status,
+                        "note": (
+                            f"найден похожий файл, "
+                            f"похож в пределах {distance}"
+                        ),
+                    }
+
+        if (
+            file_hash
+            and file_hash not in pending_new_hashes
+            and status_code in (
+                int(AddedFileStatus.SUCCESSFULLY_IMPORTED),
+                int(AddedFileStatus.ALREADY_IN_DATABASE),
+            )
+        ):
+            send_hashes.append(file_hash)
+
+    return resp, send_hashes
+
+
 DUPLICATE_PENDING_TTL = 3600
 _PENDING_DUPLICATES: dict[str, dict] = {}
 
@@ -747,6 +867,7 @@ async def start_script():
         if not hashes:
             await answer_with_retry(msg, "Не указан хэш")
             return
+        pending_prompts: list[dict] = []
         for hash_str in hashes:
             logger.info(f"Обработка {hash_str}")
             try:
@@ -780,7 +901,13 @@ async def start_script():
                 if not urls:
                     await answer_with_retry(msg, f"{hash_str}: источники не найдены")
                     continue
-                resp = await run_hydrus(hydrus.import_content, urls=urls)
+                resp, _ = await import_urls_with_duplicates(
+                    hydrus,
+                    urls,
+                    tags=None,
+                    priority_domains=priority_domains,
+                    pending_prompts=pending_prompts
+                )
             except hydrus_api.HydrusAPIException as ex:
                 logger.error(f"Ошибка Hydrus для {hash_str}: {ex}")
                 await answer_with_retry(msg, f"{hash_str}: ошибка Hydrus API")
@@ -794,6 +921,12 @@ async def start_script():
             )
             logger.info(f"Отправленный ответ: {reply[:100]}")
             await answer_long_with_retry(msg, reply)
+            for pending in pending_prompts:
+                try:
+                    await send_duplicate_prompt(bot, msg, hydrus, pending)
+                except Exception as ex:
+                    logger.error(f"Не удалось показать выбор дубликата: {ex}")
+            pending_prompts.clear()
 
     @dp.message(Command("tags_by_hash"))
     async def tags_by_hash_handler(msg: Message, command: CommandObject):
@@ -880,7 +1013,6 @@ async def start_script():
         logger.info("Запуск message_handler")
         sauce_error: str | None = None
         pending_prompts: list[dict] = []
-        pending_new_hashes: set[str] = set()
         if msg_content := msg.photo:
             if not (msg.photo and "photo" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, "photo")
@@ -911,11 +1043,14 @@ async def start_script():
 
             resp = []
             if urls:
-                resp.extend(await run_hydrus(
-                    hydrus.add_files_from_urls,
+                url_resp, _ = await import_urls_with_duplicates(
+                    hydrus,
                     urls,
-                    tags=tags
-                ))
+                    tags=tags,
+                    priority_domains=priority_domains,
+                    pending_prompts=pending_prompts
+                )
+                resp.extend(url_resp)
             file_resp, _ = await import_file_or_prompt(
                 hydrus,
                 content_file,
@@ -960,11 +1095,14 @@ async def start_script():
 
                 resp = []
                 if urls:
-                    resp.extend(await run_hydrus(
-                        hydrus.add_files_from_urls,
+                    url_resp, _ = await import_urls_with_duplicates(
+                        hydrus,
                         urls,
-                        tags=tags
-                    ))
+                        tags=tags,
+                        priority_domains=priority_domains,
+                        pending_prompts=pending_prompts
+                    )
+                    resp.extend(url_resp)
                 file_resp, keep_temp = await import_file_or_prompt(
                     hydrus,
                     content_file,
@@ -1015,11 +1153,14 @@ async def start_script():
 
                 resp = []
                 if urls:
-                    resp.extend(await run_hydrus(
-                        hydrus.add_files_from_urls,
+                    url_resp, _ = await import_urls_with_duplicates(
+                        hydrus,
                         urls,
-                        tags=tags
-                    ))
+                        tags=tags,
+                        priority_domains=priority_domains,
+                        pending_prompts=pending_prompts
+                    )
+                    resp.extend(url_resp)
                 file_resp, keep_temp = await import_file_or_prompt(
                     hydrus,
                     content_file,
@@ -1063,11 +1204,14 @@ async def start_script():
 
                 resp = []
                 if urls:
-                    resp.extend(await run_hydrus(
-                        hydrus.add_files_from_urls,
+                    url_resp, _ = await import_urls_with_duplicates(
+                        hydrus,
                         urls,
-                        tags=tags
-                    ))
+                        tags=tags,
+                        priority_domains=priority_domains,
+                        pending_prompts=pending_prompts
+                    )
+                    resp.extend(url_resp)
                 file_resp, keep_temp = await import_file_or_prompt(
                     hydrus,
                     content_file,
@@ -1096,112 +1240,13 @@ async def start_script():
             urls = get_urls_from_msg(msg)
             # Скачиваем ссылки, проставляем теги ко всем ним.
             # Для каждой новой ссылки проверяем перцептивные дубликаты.
-            resp: list[dict] = []
-            send_hashes: list[str] = []
-            for url, status in await run_hydrus(
-                hydrus.add_files_from_urls_detailed,
+            resp, send_hashes = await import_urls_with_duplicates(
+                hydrus,
                 urls,
-                tags=tags
-            ):
-                resp.append(status)
-                file_hash = status.get("hash") or ""
-                status_code = status.get("status")
-                if (
-                    status_code == int(AddedFileStatus.SUCCESSFULLY_IMPORTED)
-                    and file_hash
-                ):
-                    duplicate = await run_hydrus(
-                        hydrus.find_url_duplicates,
-                        file_hash,
-                        CONF.DUPLICATE_MAX_DISTANCE
-                    )
-                    if duplicate:
-                        resolved = None
-                        candidate_hashes = list(duplicate.get("hashes", []))
-                        for candidate_hash in candidate_hashes:
-                            result = await run_hydrus(
-                                hydrus.resolve_url_duplicate,
-                                url,
-                                file_hash,
-                                candidate_hash,
-                                distance=int(duplicate.get("distance", 0)),
-                                priority_domains=priority_domains,
-                                tags=tags
-                            )
-                            if result.get("action") != "pending":
-                                resolved = result
-                                break
-                        if resolved:
-                            if resolved.get("action") == "kept_existing":
-                                file_hash = str(resolved.get("existing_hash") or "")
-                                resp[-1] = {
-                                    "status": int(
-                                        AddedFileStatus.ALREADY_IN_DATABASE
-                                    ),
-                                    "hash": file_hash,
-                                    "note": (
-                                        "оставлен существующий файл, "
-                                        "новая копия удалена"
-                                    ),
-                                }
-                            elif resolved.get("action") == "kept_new":
-                                resp[-1] = {
-                                    "status": int(
-                                        AddedFileStatus.SUCCESSFULLY_IMPORTED
-                                    ),
-                                    "hash": file_hash,
-                                    "note": (
-                                        "оставлен новый файл, "
-                                        "существующая копия удалена"
-                                    ),
-                                }
-                        elif candidate_hashes:
-                            candidate_hash = candidate_hashes[0]
-                            distance = int(duplicate.get("distance", 0))
-                            existing_info = await run_hydrus(
-                                hydrus.get_file_info,
-                                candidate_hash
-                            )
-                            new_info = await run_hydrus(
-                                hydrus.get_file_info,
-                                file_hash
-                            )
-                            token = _store_pending_duplicate({
-                                "url": url,
-                                "new_hash": file_hash,
-                                "existing_hash": candidate_hash,
-                                "distance": distance,
-                                "tags": list(tags),
-                                "existing_info": existing_info,
-                                "new_info": new_info,
-                            })
-                            pending_prompts.append({
-                                "token": token,
-                                "url": url,
-                                "new_hash": file_hash,
-                                "existing_hash": candidate_hash,
-                                "distance": distance,
-                                "tags": list(tags),
-                                "existing_info": existing_info,
-                                "new_info": new_info,
-                            })
-                            pending_new_hashes.add(file_hash)
-                            resp[-1] = {
-                                **status,
-                                "note": (
-                                    f"найден похожий файл, "
-                                    f"похож в пределах {distance}"
-                                ),
-                            }
-                if (
-                    file_hash
-                    and file_hash not in pending_new_hashes
-                    and status_code in (
-                        int(AddedFileStatus.SUCCESSFULLY_IMPORTED),
-                        int(AddedFileStatus.ALREADY_IN_DATABASE),
-                    )
-                ):
-                    send_hashes.append(file_hash)
+                tags=tags,
+                priority_domains=priority_domains,
+                pending_prompts=pending_prompts
+            )
 
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)

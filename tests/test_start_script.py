@@ -5,7 +5,7 @@ import threading
 import time
 import unittest
 from io import BytesIO
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from aiogram import exceptions
 import hydrus_api
@@ -25,6 +25,7 @@ from start_script import (
     download_with_retry,
     format_duplicate_details,
     import_file_or_prompt,
+    import_urls_with_duplicates,
     get_telegram_proxy,
     handle_request_errors,
     make_temp_file_path,
@@ -290,6 +291,107 @@ class SauceFileErrorTests(unittest.TestCase):
                 {"Content-Type": "image/png", "Content-Length": "unknown"}
             )
         )
+
+
+class ImportUrlsWithDuplicatesTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        _PENDING_DUPLICATES.clear()
+
+    def tearDown(self):
+        _PENDING_DUPLICATES.clear()
+
+    @staticmethod
+    async def _run_hydrus(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    def _hydrus(self, statuses):
+        hydrus = Mock()
+        hydrus.add_files_from_urls_detailed.return_value = statuses
+        hydrus.find_url_duplicates.return_value = None
+        hydrus.get_file_info.return_value = {"hash": "info"}
+        return hydrus
+
+    async def test_new_file_without_duplicate_is_sent(self):
+        hydrus = self._hydrus([
+            ("https://example.com/a", {"status": 1, "hash": "new", "note": ""})
+        ])
+        resp, send_hashes = await import_urls_with_duplicates(
+            hydrus,
+            ["https://example.com/a"],
+            tags=["tag"],
+            priority_domains=set(),
+            pending_prompts=[],
+        )
+        self.assertEqual(resp[0]["hash"], "new")
+        self.assertEqual(send_hashes, ["new"])
+
+    async def test_exact_existing_replaces_status(self):
+        hydrus = self._hydrus([
+            ("https://example.com/a", {"status": 1, "hash": "new", "note": ""})
+        ])
+        hydrus.find_url_duplicates.return_value = {
+            "distance": 0,
+            "hashes": ["existing"],
+        }
+        hydrus.resolve_url_duplicate.return_value = {
+            "action": "kept_existing",
+            "existing_hash": "existing",
+        }
+        with patch("start_script.run_hydrus", new=self._run_hydrus):
+            resp, send_hashes = await import_urls_with_duplicates(
+                hydrus,
+                ["https://example.com/a"],
+                tags=["tag"],
+                priority_domains=set(),
+                pending_prompts=[],
+            )
+
+        self.assertEqual(resp[0]["status"], 2)
+        self.assertEqual(resp[0]["hash"], "existing")
+        self.assertEqual(send_hashes, ["existing"])
+
+    async def test_already_in_database_skips_duplicate_check(self):
+        hydrus = self._hydrus([
+            ("https://example.com/a", {"status": 2, "hash": "existing", "note": ""})
+        ])
+        with patch("start_script.run_hydrus", new=self._run_hydrus):
+            resp, send_hashes = await import_urls_with_duplicates(
+                hydrus,
+                ["https://example.com/a"],
+                tags=["tag"],
+                priority_domains=set(),
+                pending_prompts=[],
+            )
+
+        self.assertEqual(resp[0]["status"], 2)
+        self.assertEqual(send_hashes, ["existing"])
+        hydrus.find_url_duplicates.assert_not_called()
+
+    async def test_pending_duplicate_is_not_sent_and_prompted(self):
+        hydrus = self._hydrus([
+            ("https://example.com/a", {"status": 1, "hash": "new", "note": ""})
+        ])
+        hydrus.find_url_duplicates.return_value = {
+            "distance": 5,
+            "hashes": ["existing"],
+        }
+        hydrus.resolve_url_duplicate.return_value = {"action": "pending"}
+        pending_prompts: list[dict] = []
+        with patch("start_script.run_hydrus", new=self._run_hydrus):
+            resp, send_hashes = await import_urls_with_duplicates(
+                hydrus,
+                ["https://example.com/a"],
+                tags=["tag"],
+                priority_domains=set(),
+                pending_prompts=pending_prompts,
+            )
+
+        self.assertEqual(resp[0]["status"], 1)
+        self.assertEqual(send_hashes, [])
+        self.assertEqual(len(pending_prompts), 1)
+        self.assertEqual(pending_prompts[0]["url"], "https://example.com/a")
+        self.assertIn("похож", resp[0]["note"])
+        self.assertEqual(len(_PENDING_DUPLICATES), 1)
 
 
 class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):
