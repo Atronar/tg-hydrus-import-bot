@@ -393,6 +393,46 @@ class ImportUrlsWithDuplicatesTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("похож", resp[0]["note"])
         self.assertEqual(len(_PENDING_DUPLICATES), 1)
 
+    async def test_unknown_status_then_new_file_is_checked(self):
+        """После status 0 и повторного импорта новый файл проверяется."""
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "https://example.com/a": [
+                [{"status": 0, "hash": "dead_hash"}],
+                [{"status": 1, "hash": "new_hash"}],
+            ],
+        }
+        hydrus = make_hydrus(
+            {
+                HydrusPermission.URL_IMPORT_EDIT,
+                HydrusPermission.PAGES,
+            },
+            client,
+        )
+        hydrus.find_url_duplicates = Mock(return_value=None)
+
+        with (
+            patch("start_script.run_hydrus", new=self._run_hydrus),
+            patch("hydrus_requests.time.sleep"),
+        ):
+            resp, send_hashes = await import_urls_with_duplicates(
+                hydrus,
+                ["https://example.com/a"],
+                tags=[],
+                priority_domains=set(),
+                pending_prompts=[],
+            )
+
+        self.assertEqual(resp[0]["status"], 1)
+        self.assertEqual(resp[0]["hash"], "new_hash")
+        self.assertEqual(send_hashes, ["new_hash"])
+        hydrus.find_url_duplicates.assert_called_once()
+        self.assertEqual(
+            hydrus.find_url_duplicates.call_args.args[0],
+            "new_hash",
+        )
+        self.assertEqual(len(client.new_page_payloads), 1)
+
 
 class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):
     async def test_hydrus_error_is_reported_to_user(self):
