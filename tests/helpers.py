@@ -47,6 +47,26 @@ class FakeResponse:
         self.closed = True
 
 
+class FakeBot:
+    """Бот, записывающий поставленные реакции."""
+
+    def __init__(self):
+        self.reactions: list[tuple[int, str]] = []
+        self.reaction_error: Exception | None = None
+
+    async def set_message_reaction(
+        self,
+        chat_id: int,
+        message_id: int,
+        reaction: list[Any],
+        **kwargs,
+    ):
+        if self.reaction_error:
+            raise self.reaction_error
+        self.reactions.append((message_id, reaction[0].emoji))
+        return True
+
+
 class FakeMessage:
     """Сообщение Telegram, записывающее вызовы методов ответа."""
 
@@ -58,12 +78,16 @@ class FakeMessage:
         message_id: int = 1,
         photo: list[Any] | None = None,
         file_unique_id: str = "unique",
+        bot: FakeBot | None = None,
+        chat_id: int = 100,
     ):
         self.text = text
         self.caption = caption
         self.message_id = message_id
         self.photo = photo or []
         self.document = SimpleNamespace(file_unique_id=file_unique_id)
+        self.bot = bot or FakeBot()
+        self.chat = SimpleNamespace(id=chat_id)
         self.answers: list[tuple[str, dict[str, Any]]] = []
         self.media: list[tuple[str, Any, dict[str, Any]]] = []
         self.media_data: list[tuple[str, bytes, dict[str, Any]]] = []

@@ -27,6 +27,7 @@ from aiogram.types import (
     InputMediaPhoto,
     InputMediaVideo,
     Message,
+    ReactionTypeEmoji,
 )
 from aiogram import F, exceptions
 import hydrus_api
@@ -45,6 +46,11 @@ from tg_parse_requests import get_tags_from_msg, get_urls_from_msg, \
 MAX_MESSAGE_LENGTH = 4000
 MAX_TELEGRAM_ATTEMPTS = 3
 TELEGRAM_NETWORK_RETRY_DELAY = 60
+
+# Реакции на обрабатываемое сообщение
+REACTION_PROCESSING = "✍"
+REACTION_SUCCESS = "👍"
+REACTION_FAILURE = "👎"
 
 HELP_TEXT = """Бот импортирует контент из Telegram в Hydrus Network.
 
@@ -696,19 +702,44 @@ async def answer_long_with_retry(msg: Message, text: str, **kwargs):
     return await answer_with_retry(msg, text, **kwargs)
 
 
+async def set_message_reaction(msg: Message, emoji: str) -> None:
+    """Ставит реакцию на сообщение, не прерывая его обработку.
+
+    Реакция может быть недоступна: например, у бота нет нужных прав
+    или сообщение слишком старое. Это не должно ломать импорт.
+    """
+    bot = getattr(msg, "bot", None)
+    chat = getattr(msg, "chat", None)
+    if bot is None or chat is None:
+        return
+    try:
+        await bot.set_message_reaction(
+            chat_id=chat.id,
+            message_id=msg.message_id,
+            reaction=[ReactionTypeEmoji(emoji=emoji)],
+        )
+    except Exception as ex:
+        logger.debug(f"Не удалось поставить реакцию {emoji}: {ex}")
+
+
 def handle_request_errors(func):
     """Отвечает пользователю, если Hydrus или Telegram вернули ошибку.
 
     Без этого обработчик молча падал, и пользователь не получал ответа.
+    Заодно показывает ход обработки реакциями: ✍ в начале, 👍 при
+    успехе и 👎 при ошибке.
     """
     @wraps(func)
     async def wrapper(msg: Message, *args, **kwargs):
+        await set_message_reaction(msg, REACTION_PROCESSING)
         try:
-            return await func(msg, *args, **kwargs)
+            result = await func(msg, *args, **kwargs)
         except hydrus_api.HydrusAPIException as ex:
+            await set_message_reaction(msg, REACTION_FAILURE)
             logger.error(f"Ошибка Hydrus API: {ex}")
             await answer_with_retry(msg, "Ошибка Hydrus API. Смотри логи.")
         except exceptions.TelegramBadRequest as ex:
+            await set_message_reaction(msg, REACTION_FAILURE)
             logger.error(f"Telegram отклонил ответ: {ex}")
             await answer_with_retry(
                 msg,
@@ -716,11 +747,15 @@ def handle_request_errors(func):
             )
         except Exception as ex:
             # Не оставляем пользователя без ответа при неожиданной ошибке.
+            await set_message_reaction(msg, REACTION_FAILURE)
             logger.exception(f"Непредвиденная ошибка: {ex}")
             await answer_with_retry(
                 msg,
                 "Непредвиденная ошибка. Смотри логи."
             )
+        else:
+            await set_message_reaction(msg, REACTION_SUCCESS)
+            return result
     return wrapper
 
 

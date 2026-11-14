@@ -15,6 +15,9 @@ from start_script import (
     DUPLICATE_PENDING_TTL,
     HELP_TEXT,
     MAX_MESSAGE_LENGTH,
+    REACTION_FAILURE,
+    REACTION_PROCESSING,
+    REACTION_SUCCESS,
     _PENDING_DUPLICATES,
     _duplicate_keyboard,
     _store_pending_duplicate,
@@ -585,6 +588,10 @@ class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):
             msg.answers,
             [("Ошибка Hydrus API. Смотри логи.", {"reply_to_message_id": 7})],
         )
+        self.assertEqual(
+            msg.bot.reactions,
+            [(7, REACTION_PROCESSING), (7, REACTION_FAILURE)],
+        )
 
     async def test_telegram_bad_request_is_reported_to_user(self):
         @handle_request_errors
@@ -601,6 +608,10 @@ class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):
                     {"reply_to_message_id": 8},
                 )
             ],
+        )
+        self.assertEqual(
+            msg.bot.reactions,
+            [(8, REACTION_PROCESSING), (8, REACTION_FAILURE)],
         )
 
     async def test_unexpected_error_is_reported_to_user(self):
@@ -619,13 +630,34 @@ class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
+        self.assertEqual(
+            msg.bot.reactions,
+            [(9, REACTION_PROCESSING), (9, REACTION_FAILURE)],
+        )
 
     async def test_successful_handler_result_is_returned(self):
         @handle_request_errors
         async def handler(msg):
             return "ok"
 
-        self.assertEqual(await handler(FakeMessage()), "ok")
+        msg = FakeMessage(message_id=10)
+        self.assertEqual(await handler(msg), "ok")
+        self.assertEqual(
+            msg.bot.reactions,
+            [(10, REACTION_PROCESSING), (10, REACTION_SUCCESS)],
+        )
+
+    async def test_reaction_error_does_not_break_handler(self):
+        @handle_request_errors
+        async def handler(msg):
+            return "ok"
+
+        msg = FakeMessage(message_id=11)
+        msg.bot.reaction_error = telegram_exception(
+            exceptions.TelegramBadRequest
+        )
+        self.assertEqual(await handler(msg), "ok")
+        self.assertEqual(msg.answers, [])
 
 
 class HelpTextTests(unittest.TestCase):
