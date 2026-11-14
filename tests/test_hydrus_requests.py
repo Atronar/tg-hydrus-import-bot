@@ -716,6 +716,31 @@ class ReimportUrlTests(unittest.TestCase):
             [call[0] for call in client.calls],
         )
 
+    def test_reimport_does_not_change_destination_page(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "u1": [
+                [{"status": 0, "hash": "dead_hash"}],
+                [{"status": 2, "hash": "live_hash"}],
+            ],
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.URL_IMPORT_EDIT, HydrusPermission.PAGES},
+            client,
+        )
+
+        with patch("hydrus_requests.time.sleep"):
+            result = hydrus.add_files_from_urls(["u1", "u2"])
+
+        self.assertEqual(result[0], {"status": 2, "hash": "live_hash"})
+        add_url_calls = [
+            call for call in client.calls if call[0] == "add_url"
+        ]
+        self.assertEqual(len(add_url_calls), 1)
+        url, kwargs = add_url_calls[0][1]
+        self.assertEqual(url, "u2")
+        self.assertEqual(kwargs["destination_page_name"], "test page")
+
 
 class CacheTests(unittest.TestCase):
     def test_tags_namespace_is_cached(self):

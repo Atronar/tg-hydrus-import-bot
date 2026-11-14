@@ -530,10 +530,10 @@ class HydrusRequests:
                     page_info = self.reimport_url(url)
                     if page_info:
                         reimported = True
-                        page_name = page_info.get("page_name")
-                        if page_name:
+                        reimport_page_name = page_info.get("page_name")
+                        if reimport_page_name:
                             add_url_notes[index] = (
-                                f"создана страница {page_name}"
+                                f"создана страница {reimport_page_name}"
                             )
 
             # Собственно, импорт, как в клиенте
