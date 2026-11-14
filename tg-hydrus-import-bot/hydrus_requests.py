@@ -580,6 +580,11 @@ class HydrusRequests:
                     continue
                 if url_file_statuses:
                     status = url_file_statuses[0]
+                    # status 0 означает, что Hydrus помнит ссылку, но файла
+                    # ещё/уже нет. Это не результат импорта: продолжаем ждать.
+                    if status.get("status") == AddedFileStatus.UNKNOWN:
+                        still_pending.append((index, url))
+                        continue
                     statuses[index] = status
                     # Ссылка могла стать известной уже после add_url
                     if (

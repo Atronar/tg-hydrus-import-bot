@@ -696,6 +696,9 @@ class ReimportUrlTests(unittest.TestCase):
         client.url_file_statuses = {
             "u1": [
                 [{"status": 0, "hash": "dead_hash"}],
+                # После создания страницы Hydrus ещё какое-то время
+                # возвращает старый status 0 — его нельзя считать итогом.
+                [{"status": 0, "hash": "dead_hash"}],
                 [{"status": 2, "hash": "live_hash"}],
             ],
         }
