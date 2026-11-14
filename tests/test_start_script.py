@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from aiogram import exceptions
 import hydrus_api
-from hydrus_api_enums import HydrusPermission
+from hydrus_api_enums import AddedFileStatus, HydrusPermission
 
 from start_script import (
     DUPLICATE_PENDING_TTL,
@@ -28,6 +28,7 @@ from start_script import (
     download_with_retry,
     format_duplicate_details,
     import_file_or_prompt,
+    import_resp_has_failures,
     import_urls_with_duplicates,
     get_telegram_proxy,
     handle_request_errors,
@@ -647,6 +648,18 @@ class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):
             [(10, REACTION_PROCESSING), (10, REACTION_SUCCESS)],
         )
 
+    async def test_false_result_sets_failure_reaction(self):
+        @handle_request_errors
+        async def handler(msg):
+            return False
+
+        msg = FakeMessage(message_id=12)
+        self.assertIs(await handler(msg), False)
+        self.assertEqual(
+            msg.bot.reactions,
+            [(12, REACTION_PROCESSING), (12, REACTION_FAILURE)],
+        )
+
     async def test_reaction_error_does_not_break_handler(self):
         @handle_request_errors
         async def handler(msg):
@@ -658,6 +671,39 @@ class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await handler(msg), "ok")
         self.assertEqual(msg.answers, [])
+
+
+class ImportRespHasFailuresTests(unittest.TestCase):
+    def test_empty_response_is_success(self):
+        self.assertFalse(import_resp_has_failures([]))
+
+    def test_success_statuses_are_not_failures(self):
+        self.assertFalse(import_resp_has_failures([
+            {"status": int(AddedFileStatus.SUCCESSFULLY_IMPORTED)},
+            {"status": int(AddedFileStatus.ALREADY_IN_DATABASE)},
+        ]))
+
+    def test_failed_status_is_failure(self):
+        self.assertTrue(import_resp_has_failures([
+            {"status": int(AddedFileStatus.FAILED_TO_IMPORT)},
+        ]))
+
+    def test_mixed_response_is_failure(self):
+        self.assertTrue(import_resp_has_failures([
+            {"status": int(AddedFileStatus.ALREADY_IN_DATABASE)},
+            {"status": int(AddedFileStatus.FAILED_TO_IMPORT)},
+        ]))
+
+    def test_other_unsuccessful_statuses_are_failures(self):
+        for status in (
+            AddedFileStatus.UNKNOWN,
+            AddedFileStatus.PREVIOUSLY_DELETED,
+            AddedFileStatus.VETOED,
+        ):
+            with self.subTest(status=status):
+                self.assertTrue(import_resp_has_failures([
+                    {"status": int(status)},
+                ]))
 
 
 class HelpTextTests(unittest.TestCase):

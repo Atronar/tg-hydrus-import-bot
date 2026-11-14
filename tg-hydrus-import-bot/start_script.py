@@ -339,6 +339,20 @@ async def import_urls_with_duplicates(
     return resp, send_hashes
 
 
+_SUCCESS_IMPORT_STATUSES = frozenset({
+    int(AddedFileStatus.SUCCESSFULLY_IMPORTED),
+    int(AddedFileStatus.ALREADY_IN_DATABASE),
+})
+
+
+def import_resp_has_failures(resp: list[dict]) -> bool:
+    """Проверяет, есть ли в ответе Hydrus неуспешный статус импорта."""
+    return any(
+        item.get("status") not in _SUCCESS_IMPORT_STATUSES
+        for item in resp
+    )
+
+
 DUPLICATE_PENDING_TTL = 3600
 _PENDING_DUPLICATES: dict[str, dict] = {}
 
@@ -727,7 +741,7 @@ def handle_request_errors(func):
 
     Без этого обработчик молча падал, и пользователь не получал ответа.
     Заодно показывает ход обработки реакциями: ✍ в начале, 👍 при
-    успехе и 👎 при ошибке.
+    успехе и 👎 при ошибке или результате False.
     """
     @wraps(func)
     async def wrapper(msg: Message, *args, **kwargs):
@@ -754,7 +768,12 @@ def handle_request_errors(func):
                 "Непредвиденная ошибка. Смотри логи."
             )
         else:
-            await set_message_reaction(msg, REACTION_SUCCESS)
+            # Обработчик может вернуть False, если импорт завершился
+            # неуспешным статусом, но исключения не было.
+            reaction = (
+                REACTION_FAILURE if result is False else REACTION_SUCCESS
+            )
+            await set_message_reaction(msg, reaction)
             return result
     return wrapper
 
@@ -1058,6 +1077,8 @@ async def start_script():
         logger.info("Запуск message_handler")
         sauce_error: str | None = None
         pending_prompts: list[dict] = []
+        resp: list[dict] = []
+        processing_failed = False
         if msg_content := msg.photo:
             if not (msg.photo and "photo" in CONF.CONTENT_TYPES):
                 await answer_disabled_content(msg, "photo")
@@ -1320,6 +1341,7 @@ async def start_script():
             )
         else:
             logger.warning(f"{msg}")
+            processing_failed = True
             reply = "Неизвестный тип.\n" \
                 "Смотри логи.\n" \
                 f"{msg.message_id}"
@@ -1332,6 +1354,11 @@ async def start_script():
                 await send_duplicate_prompt(bot, msg, hydrus, pending)
             except Exception as ex:
                 logger.error(f"Не удалось показать выбор дубликата: {ex}")
+        return not (
+            processing_failed
+            or import_resp_has_failures(resp)
+            or bool(sauce_error)
+        )
 
     @dp.callback_query(F.data.startswith("dup:"))
     async def duplicate_callback_handler(callback: CallbackQuery):
