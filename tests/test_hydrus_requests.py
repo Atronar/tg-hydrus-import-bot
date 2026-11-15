@@ -649,6 +649,89 @@ class UrlBatchImportTests(unittest.TestCase):
         self.assertIn("не сообщил статус", result[0]["note"])
         self.assertIn("URL added successfully.", result[0]["note"])
 
+    def test_timeout_retries_on_fallback_page(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "u1": [[], [{"status": 2, "hash": "h1"}]],
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.URL_IMPORT_EDIT, HydrusPermission.PAGES},
+            client,
+        )
+
+        with patch(
+            "hydrus_requests.time.monotonic",
+            side_effect=[0, 100, 200, 200, 200],
+        ), patch("hydrus_requests.time.sleep"):
+            result = hydrus.add_files_from_urls(["u1"])
+
+        self.assertEqual(
+            result,
+            [{"status": 2, "hash": "h1", "_imported_now": True}],
+        )
+        self.assertEqual(len(client.new_page_payloads), 1)
+        self.assertEqual(client.new_page_payloads[0]["urls"], [])
+        add_url_calls = [
+            call for call in client.calls if call[0] == "add_url"
+        ]
+        self.assertEqual(len(add_url_calls), 2)
+        self.assertEqual(
+            add_url_calls[0][1][1]["destination_page_name"],
+            "test page",
+        )
+        self.assertEqual(
+            add_url_calls[1][1][1]["destination_page_key"],
+            "new_page_key",
+        )
+
+    def test_fallback_page_is_reused_between_batches(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {"u1": [[]], "u2": [[]]}
+        hydrus = make_hydrus(
+            {HydrusPermission.URL_IMPORT_EDIT, HydrusPermission.PAGES},
+            client,
+        )
+
+        with patch("hydrus_requests.URL_IMPORT_TIMEOUT", 0), \
+                patch("hydrus_requests.time.sleep"):
+            first = hydrus.add_files_from_urls(["u1"])
+            second = hydrus.add_files_from_urls(["u2"])
+
+        self.assertEqual(
+            first[0]["status"],
+            int(AddedFileStatus.FAILED_TO_IMPORT),
+        )
+        self.assertEqual(
+            second[0]["status"],
+            int(AddedFileStatus.FAILED_TO_IMPORT),
+        )
+        self.assertEqual(len(client.new_page_payloads), 1)
+        fallback_calls = [
+            call for call in client.calls
+            if call[0] == "add_url"
+            and "destination_page_key" in call[1][1]
+        ]
+        self.assertEqual(len(fallback_calls), 2)
+
+    def test_fallback_page_failure_keeps_timeout_status(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {"u1": [[]]}
+        hydrus = make_hydrus(
+            {HydrusPermission.URL_IMPORT_EDIT, HydrusPermission.PAGES},
+            client,
+        )
+
+        with patch("hydrus_requests.URL_IMPORT_TIMEOUT", 0), \
+                patch("hydrus_requests.time.sleep"), \
+                patch.object(hydrus, "_create_url_page", return_value=None):
+            result = hydrus.add_files_from_urls(["u1"])
+
+        self.assertEqual(
+            result[0]["status"],
+            int(AddedFileStatus.FAILED_TO_IMPORT),
+        )
+        self.assertTrue(hydrus._fallback_page_unavailable)
+
     def test_detailed_result_maps_url_to_status(self):
         client = FakeHydrusClient()
         client.url_file_statuses = {

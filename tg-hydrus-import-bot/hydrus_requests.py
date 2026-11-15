@@ -107,6 +107,11 @@ class HydrusRequests:
             maxsize=1,
             ttl=60
         )
+        # Страница для повторного импорта ссылок, по которым Hydrus
+        # не сообщил статус. Создаётся один раз за сессию.
+        self._fallback_page_key: str | None = None
+        self._fallback_page_name: str | None = None
+        self._fallback_page_unavailable = False
         self.get_permission_info()
 
     @staticmethod
@@ -381,6 +386,67 @@ class HydrusRequests:
             "note": note,
         }
 
+    def _create_url_page(
+            self,
+            page_name: str,
+            urls: Iterable[str] | None = None
+        ) -> dict[str, object] | None:
+        """Создаёт страницу URL-импорта Hydrus.
+
+        Пустой список ссылок допустим: страницу можно создать заранее
+        и потом добавлять на неё ссылки через ``add_url``.
+        """
+        try:
+            response = self.client._api_request(
+                "POST",
+                "/manage_pages/new_page",
+                json={
+                    "page_type": int(PageType.URL_DOWNLOADER),
+                    "page_name": page_name,
+                    "urls": list(urls or []),
+                    "focus_page": False,
+                }
+            )
+            return response.json()
+        except (AttributeError, hydrus_api.HydrusAPIException) as ex:
+            logger.warning(f"Не удалось создать страницу {page_name}: {ex}")
+            return None
+
+    def _get_or_create_fallback_page(self) -> dict[str, object] | None:
+        """Возвращает страницу для повторного импорта ссылок.
+
+        Страница создаётся один раз за сессию и переиспользуется, чтобы
+        повторные попытки не порождали бесконечное число страниц.
+        """
+        if self._fallback_page_key:
+            return {
+                "page_key": self._fallback_page_key,
+                "page_name": self._fallback_page_name,
+            }
+        if self._fallback_page_unavailable:
+            return None
+        if not self.check_permission(HydrusPermission.PAGES):
+            logger.warning('Отсутствует доступ "manage pages"')
+            self._fallback_page_unavailable = True
+            return None
+
+        page_name = (
+            f"HC fallback {time.strftime('%Y%m%d-%H%M%S')}"
+            f"-{time.time_ns() % 1000000:06d}"
+        )
+        page_info = self._create_url_page(page_name)
+        page_key = (page_info or {}).get("page_key")
+        if not isinstance(page_key, str) or not page_key:
+            self._fallback_page_unavailable = True
+            return None
+
+        self._fallback_page_key = page_key
+        self._fallback_page_name = page_name
+        logger.info(
+            f"Создана страница {page_name} для повторного импорта ссылок"
+        )
+        return page_info
+
     def reimport_url(self, url: str) -> dict[str, object] | None:
         """Запускает повторный импорт ссылки на новой странице Hydrus.
 
@@ -398,20 +464,8 @@ class HydrusRequests:
             f"HC reimport {time.strftime('%Y%m%d-%H%M%S')}"
             f"-{time.time_ns() % 1000000:06d}"
         )
-        try:
-            response = self.client._api_request(
-                "POST",
-                "/manage_pages/new_page",
-                json={
-                    "page_type": int(PageType.URL_DOWNLOADER),
-                    "page_name": page_name,
-                    "urls": [url],
-                    "focus_page": False,
-                }
-            )
-            page_info = response.json()
-        except (AttributeError, hydrus_api.HydrusAPIException) as ex:
-            logger.warning(f"Не удалось создать страницу для {url}: {ex}")
+        page_info = self._create_url_page(page_name, [url])
+        if not page_info:
             return None
 
         logger.info(
@@ -419,6 +473,74 @@ class HydrusRequests:
             f"создана страница {page_name} для повторного импорта"
         )
         return page_info
+
+    def _poll_url_statuses(
+            self,
+            pending: list[tuple[int, str]],
+            statuses: list[hydrus_api_typing.AddedFile | None],
+            *,
+            cleaned_tags: list[str],
+            tags_namespace_hash: str | None
+        ) -> list[tuple[int, str]]:
+        """Опрашивает статусы ссылок до общего таймаута.
+
+        Возвращает ссылки, по которым статус так и не появился.
+        """
+        deadline = time.monotonic() + URL_IMPORT_TIMEOUT
+        delay = URL_IMPORT_INITIAL_DELAY
+        while pending and time.monotonic() < deadline:
+            still_pending: list[tuple[int, str]] = []
+            for index, url in pending:
+                # Дедлайн проверяем и внутри прохода: один медленный запрос
+                # не должен растягивать общее ожидание.
+                if time.monotonic() >= deadline:
+                    still_pending.append((index, url))
+                    continue
+                try:
+                    url_file_statuses = cast(
+                        hydrus_api_typing.URLFiles,
+                        self.client.get_url_files(url)
+                    ).get("url_file_statuses", [])
+                except hydrus_api.HydrusAPIException as ex:
+                    logger.warning(f"Не удалось опросить статус {url}: {ex}")
+                    still_pending.append((index, url))
+                    continue
+                if url_file_statuses:
+                    status = url_file_statuses[0]
+                    # status 0 означает, что Hydrus помнит ссылку, но файла
+                    # ещё/уже нет. Это не результат импорта: продолжаем ждать.
+                    if status.get("status") == AddedFileStatus.UNKNOWN:
+                        still_pending.append((index, url))
+                        continue
+                    # get_url_files возвращает статус 2 для любого файла,
+                    # уже находящегося в базе, в том числе только что
+                    # импортированного. Помечаем статусы, полученные после
+                    # нашей попытки импорта, чтобы вызывающий код проверил
+                    # перцептивные дубликаты.
+                    status = {**status, "_imported_now": True}
+                    statuses[index] = status
+                    # Ссылка могла стать известной уже после add_url
+                    if (
+                        cleaned_tags
+                        and status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE
+                    ):
+                        try:
+                            self._add_tags_cleaned(
+                                status.get("hash"),
+                                cleaned_tags,
+                                tags_namespace_hash
+                            )
+                        except hydrus_api.HydrusAPIException as ex:
+                            logger.warning(
+                                f"Не удалось добавить теги к {url}: {ex}"
+                            )
+                else:
+                    still_pending.append((index, url))
+            pending = still_pending
+            if pending and time.monotonic() < deadline:
+                time.sleep(delay)
+                delay = min(delay * 1.5, URL_IMPORT_MAX_DELAY)
+        return pending
 
     def _add_files_from_urls(
             self,
@@ -558,60 +680,42 @@ class HydrusRequests:
                 pending.append((index, url))
 
         # Пакетный опрос с экспоненциальной паузой
-        deadline = time.monotonic() + URL_IMPORT_TIMEOUT
-        delay = URL_IMPORT_INITIAL_DELAY
-        while pending and time.monotonic() < deadline:
-            still_pending: list[tuple[int, str]] = []
-            for index, url in pending:
-                # Дедлайн проверяем и внутри прохода: один медленный запрос
-                # не должен растягивать общее ожидание.
-                if time.monotonic() >= deadline:
-                    still_pending.append((index, url))
-                    continue
-                try:
-                    url_file_statuses = cast(
-                        hydrus_api_typing.URLFiles,
-                        self.client.get_url_files(url)
-                    ).get("url_file_statuses", [])
-                except hydrus_api.HydrusAPIException as ex:
-                    logger.warning(f"Не удалось опросить статус {url}: {ex}")
-                    still_pending.append((index, url))
-                    continue
-                if url_file_statuses:
-                    status = url_file_statuses[0]
-                    # status 0 означает, что Hydrus помнит ссылку, но файла
-                    # ещё/уже нет. Это не результат импорта: продолжаем ждать.
-                    if status.get("status") == AddedFileStatus.UNKNOWN:
-                        still_pending.append((index, url))
-                        continue
-                    # get_url_files возвращает статус 2 для любого файла,
-                    # уже находящегося в базе, в том числе только что
-                    # импортированного. Помечаем статусы, полученные после
-                    # нашей попытки импорта, чтобы вызывающий код проверил
-                    # перцептивные дубликаты.
-                    status = {**status, "_imported_now": True}
-                    statuses[index] = status
-                    # Ссылка могла стать известной уже после add_url
-                    if (
-                        cleaned_tags
-                        and status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE
-                    ):
-                        try:
-                            self._add_tags_cleaned(
-                                status.get("hash"),
-                                cleaned_tags,
-                                tags_namespace_hash
-                            )
-                        except hydrus_api.HydrusAPIException as ex:
-                            logger.warning(
-                                f"Не удалось добавить теги к {url}: {ex}"
-                            )
-                else:
-                    still_pending.append((index, url))
-            pending = still_pending
-            if pending and time.monotonic() < deadline:
-                time.sleep(delay)
-                delay = min(delay * 1.5, URL_IMPORT_MAX_DELAY)
+        pending = self._poll_url_statuses(
+            pending,
+            statuses,
+            cleaned_tags=cleaned_tags,
+            tags_namespace_hash=tags_namespace_hash
+        )
+
+        # Hydrus иногда не сообщает статус для ссылки, добавленной на
+        # страницу назначения. Одна повторная попытка на отдельной
+        # странице помогает, а сама страница переиспользуется.
+        fallback_attempted = False
+        if pending:
+            fallback_page = self._get_or_create_fallback_page()
+            fallback_key = (fallback_page or {}).get("page_key")
+            if isinstance(fallback_key, str) and fallback_key:
+                fallback_attempted = True
+                retry_pending: list[tuple[int, str]] = []
+                for index, url in pending:
+                    try:
+                        self.client.add_url(
+                            url,
+                            destination_page_key=fallback_key,
+                            service_keys_to_additional_tags=additional_tags
+                        )
+                    except hydrus_api.HydrusAPIException as ex:
+                        logger.warning(
+                            f"Не удалось повторить импорт {url} "
+                            f"на странице fallback: {ex}"
+                        )
+                    retry_pending.append((index, url))
+                pending = self._poll_url_statuses(
+                    retry_pending,
+                    statuses,
+                    cleaned_tags=cleaned_tags,
+                    tags_namespace_hash=tags_namespace_hash
+                )
 
         if pending:
             timeout = (
@@ -629,6 +733,11 @@ class HydrusRequests:
                 )
                 if add_url_note := add_url_notes.get(index):
                     note = f"{note} Дополнительно: {add_url_note}"
+                if fallback_attempted:
+                    note = (
+                        f"{note} Повторный импорт на отдельной странице "
+                        "тоже не дал статуса."
+                    )
                 statuses[index] = self._timeout_status(note)
         return unique_urls, statuses
 

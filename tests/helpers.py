@@ -238,6 +238,9 @@ def make_hydrus(permissions, client: FakeHydrusClient | None = None):
     obj.allow_insecure_api_url = False
     obj._tags_namespace_cache = TTLCache(maxsize=32, ttl=3600)
     obj._pages_cache = TTLCache(maxsize=1, ttl=60)
+    obj._fallback_page_key = None
+    obj._fallback_page_name = None
+    obj._fallback_page_unavailable = False
     return obj
 
 
