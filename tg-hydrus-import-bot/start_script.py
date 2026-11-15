@@ -359,6 +359,24 @@ async def import_urls_with_duplicates(
     return resp, send_hashes
 
 
+async def send_imported_contents(
+    hydrus: HydrusRequests,
+    send_hashes: list[str],
+    msg: Message
+) -> list[int]:
+    """Отправляет в Telegram файлы, импортированные по ссылкам."""
+    content_size: list[int] = []
+    contents = []
+    for file_hash in dict.fromkeys(send_hashes):
+        content_file = await run_hydrus(hydrus.get_file, file_hash)
+        if content_file:
+            if content_size_item := _content_length(content_file.headers):
+                content_size.append(content_size_item)
+            contents.append((content_file, file_hash))
+    await send_contents_from_responses(contents, msg)
+    return content_size
+
+
 _SUCCESS_IMPORT_STATUSES = frozenset({
     int(AddedFileStatus.SUCCESSFULLY_IMPORTED),
     int(AddedFileStatus.ALREADY_IN_DATABASE),
@@ -985,7 +1003,7 @@ async def start_script():
                 if not urls:
                     await answer_with_retry(msg, f"{hash_str}: источники не найдены")
                     continue
-                resp, _ = await import_urls_with_duplicates(
+                resp, send_hashes = await import_urls_with_duplicates(
                     hydrus,
                     urls,
                     tags=None,
@@ -997,6 +1015,7 @@ async def start_script():
                 await answer_with_retry(msg, f"{hash_str}: ошибка Hydrus API")
                 continue
 
+            await send_imported_contents(hydrus, send_hashes, msg)
             resp_str = hydrus.convert_import_resp_to_str(resp)
             reply = get_success_reply_str(
                 "хэш",
@@ -1128,8 +1147,9 @@ async def start_script():
                     )
 
             resp = []
+            url_send_hashes: list[str] = []
             if urls:
-                url_resp, _ = await import_urls_with_duplicates(
+                url_resp, url_send_hashes = await import_urls_with_duplicates(
                     hydrus,
                     urls,
                     tags=tags,
@@ -1148,6 +1168,7 @@ async def start_script():
             logger.debug(f"{resp}")
             resp_str = hydrus.convert_import_resp_to_str(resp)
 
+            await send_imported_contents(hydrus, url_send_hashes, msg)
             content_file.seek(0, io.SEEK_END)
 
             reply = get_success_reply_str(
@@ -1180,8 +1201,9 @@ async def start_script():
                 )
 
                 resp = []
+                url_send_hashes: list[str] = []
                 if urls:
-                    url_resp, _ = await import_urls_with_duplicates(
+                    url_resp, url_send_hashes = await import_urls_with_duplicates(
                         hydrus,
                         urls,
                         tags=tags,
@@ -1200,6 +1222,7 @@ async def start_script():
                 logger.debug(f"{resp}")
                 resp_str = hydrus.convert_import_resp_to_str(resp)
 
+                await send_imported_contents(hydrus, url_send_hashes, msg)
                 reply = get_success_reply_str(
                     "видео",
                     resp_str,
@@ -1238,8 +1261,9 @@ async def start_script():
                 )
 
                 resp = []
+                url_send_hashes: list[str] = []
                 if urls:
-                    url_resp, _ = await import_urls_with_duplicates(
+                    url_resp, url_send_hashes = await import_urls_with_duplicates(
                         hydrus,
                         urls,
                         tags=tags,
@@ -1258,6 +1282,7 @@ async def start_script():
                 logger.debug(f"{resp}")
                 resp_str = hydrus.convert_import_resp_to_str(resp)
 
+                await send_imported_contents(hydrus, url_send_hashes, msg)
                 reply = get_success_reply_str(
                     "аудио",
                     resp_str,
@@ -1289,8 +1314,9 @@ async def start_script():
                 )
 
                 resp = []
+                url_send_hashes: list[str] = []
                 if urls:
-                    url_resp, _ = await import_urls_with_duplicates(
+                    url_resp, url_send_hashes = await import_urls_with_duplicates(
                         hydrus,
                         urls,
                         tags=tags,
@@ -1309,6 +1335,7 @@ async def start_script():
                 logger.debug(f"{resp}")
                 resp_str = hydrus.convert_import_resp_to_str(resp)
 
+                await send_imported_contents(hydrus, url_send_hashes, msg)
                 reply = get_success_reply_str(
                     "документ",
                     resp_str,
@@ -1339,18 +1366,11 @@ async def start_script():
 
             # Отправка собственно скачанного контента.
             # Хэши уже удалённых дубликатов сюда не попадают.
-            content_size = []
-            contents = []
-            for file_hash in dict.fromkeys(send_hashes):
-                content_file = await run_hydrus(
-                    hydrus.get_file,
-                    file_hash
-                )
-                if content_file:
-                    if content_size_item := _content_length(content_file.headers):
-                        content_size.append(content_size_item)
-                    contents.append((content_file, file_hash))
-            await send_contents_from_responses(contents, msg)
+            content_size = await send_imported_contents(
+                hydrus,
+                send_hashes,
+                msg
+            )
 
             reply = get_success_reply_str(
                 "текст",

@@ -37,12 +37,14 @@ from start_script import (
     run_hydrus,
     _sauce_file_error,
     parse_hash_args,
+    send_imported_contents,
 )
 from media_info import MediaInfo
 from tg_parse_requests import MAX_PHOTO_SIZE
 from tests.helpers import (
     FakeHydrusClient,
     FakeMessage,
+    FakeResponse,
     fake_bot_download,
     make_hydrus,
     telegram_exception,
@@ -647,6 +649,55 @@ class ImportUrlsWithDuplicatesTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(send_hashes, ["h1", "h2"])
         self.assertEqual(hydrus.find_url_duplicates.call_count, 2)
+
+
+class SendImportedContentsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sends_distinct_files_and_returns_sizes(self):
+        hydrus = Mock()
+        hydrus.get_file.side_effect = [
+            FakeResponse(headers={"Content-Length": "10"}),
+            FakeResponse(headers={"Content-Length": "20"}),
+        ]
+        msg = FakeMessage()
+
+        with patch(
+            "start_script.send_contents_from_responses",
+            new=AsyncMock(),
+        ) as send:
+            content_size = await send_imported_contents(
+                hydrus,
+                ["h1", "h2", "h1"],
+                msg,
+            )
+
+        self.assertEqual(content_size, [10, 20])
+        self.assertEqual(hydrus.get_file.call_count, 2)
+        send.assert_awaited_once()
+        contents = send.call_args.args[0]
+        self.assertEqual(
+            [filename for _content_file, filename in contents],
+            ["h1", "h2"],
+        )
+
+    async def test_skips_missing_responses(self):
+        hydrus = Mock()
+        hydrus.get_file.side_effect = [None, FakeResponse()]
+        msg = FakeMessage()
+
+        with patch(
+            "start_script.send_contents_from_responses",
+            new=AsyncMock(),
+        ) as send:
+            content_size = await send_imported_contents(
+                hydrus,
+                ["h1", "h2"],
+                msg,
+            )
+
+        self.assertEqual(content_size, [])
+        contents = send.call_args.args[0]
+        self.assertEqual(len(contents), 1)
+        self.assertEqual(contents[0][1], "h2")
 
 
 class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):
