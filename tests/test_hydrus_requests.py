@@ -1323,6 +1323,86 @@ class GetFileInfoTests(unittest.TestCase):
         )
 
 
+class GetImportTimesTests(unittest.TestCase):
+    def test_returns_local_domain_time_and_file_id(self):
+        client = FakeHydrusClient()
+        client.metadata["h"] = {
+            "hash": "h",
+            "file_id": 42,
+            "file_services": {
+                "current": {
+                    "local": {"type": 2, "time_imported": 100.5},
+                    "all": {"type": 15, "time_imported": 50.0},
+                }
+            },
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH}, client
+        )
+
+        self.assertEqual(
+            hydrus.get_import_times(["h"]),
+            {"h": (100.5, 42)},
+        )
+
+    def test_falls_back_to_any_current_service(self):
+        client = FakeHydrusClient()
+        client.metadata["h"] = {
+            "hash": "h",
+            "file_id": 7,
+            "file_services": {
+                "current": {
+                    "all": {"type": 15, "time_imported": 50.0},
+                }
+            },
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH}, client
+        )
+
+        self.assertEqual(
+            hydrus.get_import_times(["h"]),
+            {"h": (50.0, 7)},
+        )
+
+    def test_batches_and_deduplicates_hashes(self):
+        client = FakeHydrusClient()
+        for file_hash, file_id in (("h1", 1), ("h2", 2)):
+            client.metadata[file_hash] = {
+                "hash": file_hash,
+                "file_id": file_id,
+                "file_services": {
+                    "current": {
+                        "local": {"type": 2, "time_imported": 10.0}
+                    }
+                },
+            }
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH}, client
+        )
+
+        result = hydrus.get_import_times(["h1", "h1", "h2"])
+
+        self.assertEqual(result, {"h1": (10.0, 1), "h2": (10.0, 2)})
+        self.assertIn(("get_file_metadata", ["h1", "h2"]), client.calls)
+
+    def test_without_permission_returns_empty(self):
+        client = FakeHydrusClient()
+        hydrus = make_hydrus(set(), client)
+
+        self.assertEqual(hydrus.get_import_times(["h"]), {})
+        self.assertEqual(client.calls, [])
+
+    def test_missing_time_is_skipped(self):
+        client = FakeHydrusClient()
+        client.metadata["h"] = {"hash": "h", "file_id": 1}
+        hydrus = make_hydrus(
+            {HydrusPermission.FILES_SEARCH_FETCH}, client
+        )
+
+        self.assertEqual(hydrus.get_import_times(["h"]), {})
+
+
 class GetFileBytesTests(unittest.TestCase):
     def test_returns_file_without_king_resolution(self):
         client = FakeHydrusClient()

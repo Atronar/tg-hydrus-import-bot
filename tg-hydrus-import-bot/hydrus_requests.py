@@ -17,6 +17,7 @@ from hydrus_api_enums import (
     DuplicateRelationship,
     HydrusPermission,
     PageType,
+    ServiceType,
 )
 import hydrus_api_typing
 from media_info import is_exact_duplicate, is_image_mime, probe_media
@@ -1662,6 +1663,61 @@ class HydrusRequests:
         if not file_metadata:
             return None
         return file_metadata[0]
+
+    def get_import_times(
+        self,
+        hashes: Iterable[str]
+    ) -> dict[str, tuple[float, int]]:
+        """Возвращает время импорта и file_id для файлов.
+
+        Один запрос ``get_file_metadata`` на весь список. Время берётся
+        из локального файлового домена; если его нет — из любого
+        текущего сервиса с ``time_imported``. При отсутствии прав или
+        ошибке API возвращает пустой словарь: порядок файлов останется
+        прежним.
+        """
+        hash_list = [file_hash for file_hash in dict.fromkeys(hashes) if file_hash]
+        if not hash_list:
+            return {}
+        if not self.check_permission(HydrusPermission.FILES_SEARCH_FETCH):
+            logger.warning('Отсутствует доступ "search and fetch files"')
+            return {}
+        try:
+            metadata = (
+                self.client
+                .get_file_metadata(hashes=hash_list)
+                .get('metadata', [])
+            )
+        except hydrus_api.HydrusAPIException as ex:
+            logger.warning(f"Не удалось получить время импорта: {ex}")
+            return {}
+
+        import_times: dict[str, tuple[float, int]] = {}
+        for item in metadata:
+            file_hash = str(item.get('hash') or '')
+            if not file_hash:
+                continue
+            current = (item.get('file_services') or {}).get('current') or {}
+            imported = [
+                float(service['time_imported'])
+                for service in current.values()
+                if isinstance(service, dict)
+                and service.get('time_imported') is not None
+                and service.get('type') == int(ServiceType.LOCAL_FILE_DOMAIN)
+            ]
+            if not imported:
+                imported = [
+                    float(service['time_imported'])
+                    for service in current.values()
+                    if isinstance(service, dict)
+                    and service.get('time_imported') is not None
+                ]
+            if imported:
+                import_times[file_hash] = (
+                    min(imported),
+                    int(item.get('file_id') or 0),
+                )
+        return import_times
 
     def set_duplicate_relationship(
         self,

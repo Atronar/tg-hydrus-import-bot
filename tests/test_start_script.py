@@ -320,6 +320,7 @@ class ImportUrlsWithDuplicatesTests(unittest.IsolatedAsyncioTestCase):
         )
         hydrus.find_url_duplicates.return_value = None
         hydrus.get_file_info.return_value = {"hash": "info"}
+        hydrus.get_import_times.return_value = {}
         return hydrus
 
     async def test_new_file_without_duplicate_is_sent(self):
@@ -335,6 +336,69 @@ class ImportUrlsWithDuplicatesTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(resp[0]["hash"], "new")
         self.assertEqual(send_hashes, ["new"])
+
+    async def test_files_are_sorted_by_import_time(self):
+        hydrus = self._hydrus([
+            (
+                "https://example.com/a",
+                {"status": 1, "hash": "late", "note": ""}
+            ),
+            (
+                "https://example.com/a",
+                {"status": 1, "hash": "early", "note": ""}
+            ),
+        ])
+        hydrus.get_import_times.return_value = {
+            "late": (200.0, 2),
+            "early": (100.0, 1),
+        }
+
+        resp, send_hashes = await import_urls_with_duplicates(
+            hydrus,
+            ["https://example.com/a"],
+            tags=["tag"],
+            priority_domains=set(),
+            pending_prompts=[],
+        )
+
+        self.assertEqual(
+            [item["hash"] for item in resp],
+            ["early", "late"],
+        )
+        self.assertEqual(send_hashes, ["early", "late"])
+        hydrus.get_import_times.assert_called_once_with(
+            ["late", "early"]
+        )
+
+    async def test_import_time_ties_are_broken_by_file_id(self):
+        hydrus = self._hydrus([
+            (
+                "https://example.com/a",
+                {"status": 1, "hash": "h1", "note": ""}
+            ),
+            (
+                "https://example.com/a",
+                {"status": 1, "hash": "h2", "note": ""}
+            ),
+        ])
+        hydrus.get_import_times.return_value = {
+            "h1": (100.0, 2),
+            "h2": (100.0, 1),
+        }
+
+        resp, send_hashes = await import_urls_with_duplicates(
+            hydrus,
+            ["https://example.com/a"],
+            tags=["tag"],
+            priority_domains=set(),
+            pending_prompts=[],
+        )
+
+        self.assertEqual(
+            [item["hash"] for item in resp],
+            ["h2", "h1"],
+        )
+        self.assertEqual(send_hashes, ["h2", "h1"])
 
     async def test_exact_existing_replaces_status(self):
         hydrus = self._hydrus([

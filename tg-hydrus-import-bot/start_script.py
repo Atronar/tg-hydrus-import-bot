@@ -238,6 +238,27 @@ async def import_urls_with_duplicates(
         urls,
         tags=tag_list
     ):
+        # Hydrus отдаёт файлы ссылки в порядке обхода множества.
+        # Сортируем по времени импорта, а при равенстве — по file_id,
+        # чтобы порядок был хронологическим и стабильным.
+        if len(url_statuses) > 1:
+            url_hashes = [
+                str(status.get("hash") or "")
+                for status in url_statuses
+            ]
+            import_times = await run_hydrus(
+                hydrus.get_import_times,
+                url_hashes
+            )
+            if import_times:
+                url_statuses = sorted(
+                    url_statuses,
+                    key=lambda status: import_times.get(
+                        str(status.get("hash") or ""),
+                        (float("inf"), 0)
+                    )
+                )
+
         # Если среди файлов ссылки есть только что импортированные,
         # отправляем все; для полностью известной ссылки ограничиваем
         # вывод, чтобы не присылать бесконечную галерею.
