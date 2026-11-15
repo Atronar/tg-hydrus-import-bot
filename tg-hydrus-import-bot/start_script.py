@@ -443,26 +443,33 @@ def _take_pending_duplicate(token: str) -> dict | None:
     return _PENDING_DUPLICATES.pop(token, None)
 
 
+MAX_CAPTION_LENGTH = 1024
+
+
 def _duplicate_keyboard(token: str) -> InlineKeyboardMarkup:
     """Клавиатура выбора для пары похожих файлов."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(
-                text="Оставить первый (существующий)",
-                callback_data=f"dup:keep_existing:{token}"
-            )],
-            [InlineKeyboardButton(
-                text="Оставить второй (новый)",
-                callback_data=f"dup:keep_new:{token}"
-            )],
-            [InlineKeyboardButton(
-                text="Оставить оба — альтернативы",
-                callback_data=f"dup:both_alt:{token}"
-            )],
-            [InlineKeyboardButton(
-                text="Оставить оба — не связаны",
-                callback_data=f"dup:both_unrelated:{token}"
-            )],
+            [
+                InlineKeyboardButton(
+                    text="Оставить первый (существующий)",
+                    callback_data=f"dup:keep_existing:{token}"
+                ),
+                InlineKeyboardButton(
+                    text="Оставить второй (новый)",
+                    callback_data=f"dup:keep_new:{token}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Оставить оба — альтернативы",
+                    callback_data=f"dup:both_alt:{token}"
+                ),
+                InlineKeyboardButton(
+                    text="Оставить оба — не связаны",
+                    callback_data=f"dup:both_unrelated:{token}"
+                ),
+            ],
         ]
     )
 
@@ -500,11 +507,11 @@ def _format_file_info(info: dict | None) -> str:
         if isinstance(url, str)
     ]
     if urls:
-        shown = ", ".join(urls[:3])
+        shown = "\n".join(urls[:3])
         if len(urls) > 3:
             shown = f"{shown} …"
         parts.append(f"ссылки: {shown}")
-    return "; ".join(parts) or "нет данных"
+    return "\n".join(parts) or "нет данных"
 
 
 def format_duplicate_details(pending: dict) -> str:
@@ -531,11 +538,37 @@ def format_duplicate_details(pending: dict) -> str:
     return "\n".join(lines)
 
 
+def _truncate_caption(text: str) -> str:
+    """Обрезает подпись до лимита Telegram."""
+    if len(text) <= MAX_CAPTION_LENGTH:
+        return text
+    return text[:MAX_CAPTION_LENGTH - 1] + "…"
+
+
+def format_duplicate_caption(pending: dict, label: str) -> str:
+    """Подпись к одному файлу пары дубликатов."""
+    if label == "existing":
+        title = "Первый (существующий)"
+        file_hash = pending.get("existing_hash")
+        info = pending.get("existing_info")
+    else:
+        title = "Второй (новый)"
+        file_hash = pending.get("new_hash")
+        info = pending.get("new_info")
+    lines = [
+        title,
+        f"hash: {file_hash or 'ещё не импортирован'}",
+        _format_file_info(info),
+    ]
+    return _truncate_caption("\n".join(lines))
+
+
 def _media_for_duplicate(
     content: bytes,
     info: dict | None,
     label: str,
-    file_hash: str
+    file_hash: str,
+    caption: str | None = None
 ):
     """Создаёт элемент медиагруппы по MIME-типу файла."""
     mime = str((info or {}).get("mime") or "")
@@ -545,12 +578,16 @@ def _media_for_duplicate(
         f"{label}_{file_hash[:8]}.{extension}"
     )
     if mime.startswith("image/"):
-        return InputMediaPhoto(media=input_file)
+        return InputMediaPhoto(media=input_file, caption=caption)
     if mime.startswith("video/"):
-        return InputMediaVideo(media=input_file, supports_streaming=True)
+        return InputMediaVideo(
+            media=input_file,
+            caption=caption,
+            supports_streaming=True
+        )
     if mime.startswith("audio/"):
-        return InputMediaAudio(media=input_file)
-    return InputMediaDocument(media=input_file)
+        return InputMediaAudio(media=input_file, caption=caption)
+    return InputMediaDocument(media=input_file, caption=caption)
 
 
 async def send_duplicate_prompt(
@@ -592,7 +629,8 @@ async def send_duplicate_prompt(
                     content,
                     info,
                     label,
-                    str(file_hash or "new")
+                    str(file_hash or "new"),
+                    caption=format_duplicate_caption(pending, label)
                 )
             )
 

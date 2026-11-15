@@ -14,6 +14,7 @@ from hydrus_api_enums import AddedFileStatus, HydrusPermission
 from start_script import (
     DUPLICATE_PENDING_TTL,
     HELP_TEXT,
+    MAX_CAPTION_LENGTH,
     MAX_MESSAGE_LENGTH,
     REACTION_FAILURE,
     REACTION_PROCESSING,
@@ -26,6 +27,7 @@ from start_script import (
     answer_with_retry,
     apply_duplicate_action,
     download_with_retry,
+    format_duplicate_caption,
     format_duplicate_details,
     import_file_or_prompt,
     import_resp_has_failures,
@@ -37,6 +39,7 @@ from start_script import (
     run_hydrus,
     _sauce_file_error,
     parse_hash_args,
+    send_duplicate_prompt,
     send_imported_contents,
 )
 from media_info import MediaInfo
@@ -972,6 +975,62 @@ class DuplicatePromptTests(unittest.TestCase):
                 "dup:both_unrelated:token",
             ],
         )
+        self.assertEqual(len(keyboard.inline_keyboard), 2)
+        self.assertEqual(
+            [len(row) for row in keyboard.inline_keyboard],
+            [2, 2],
+        )
+
+    def test_caption_contains_file_info(self):
+        pending = {
+            "existing_hash": "existing",
+            "new_hash": "new",
+            "distance": 5,
+            "existing_info": {
+                "mime": "image/png",
+                "size": 1024,
+                "width": 100,
+                "height": 80,
+            },
+            "new_info": {
+                "mime": "image/jpeg",
+                "size": 2048,
+                "width": 90,
+                "height": 70,
+            },
+        }
+
+        existing = format_duplicate_caption(pending, "existing")
+        new = format_duplicate_caption(pending, "new")
+
+        self.assertIn("Первый (существующий)", existing)
+        self.assertIn("existing", existing)
+        self.assertIn("image/png", existing)
+        self.assertIn("1.0 KiB", existing)
+        self.assertIn("100×80", existing)
+        self.assertIn("Второй (новый)", new)
+        self.assertIn("new", new)
+        self.assertIn("image/jpeg", new)
+        self.assertIn("2.0 KiB", new)
+        self.assertIn("90×70", new)
+        self.assertNotEqual(existing, new)
+
+    def test_caption_is_truncated(self):
+        pending = {
+            "existing_hash": "existing",
+            "existing_info": {
+                "mime": "image/png",
+                "size": 1024,
+                "width": 100,
+                "height": 80,
+                "known_urls": [f"https://example.com/{'x' * 1000}"],
+            },
+        }
+
+        caption = format_duplicate_caption(pending, "existing")
+
+        self.assertLessEqual(len(caption), MAX_CAPTION_LENGTH)
+        self.assertTrue(caption.endswith("…"))
 
     def test_pending_duplicate_is_returned_once(self):
         token = _store_pending_duplicate({"new_hash": "new"})
@@ -990,6 +1049,58 @@ class DuplicatePromptTests(unittest.TestCase):
 
         self.assertIsNone(_take_pending_duplicate(token))
         self.assertNotIn(token, _PENDING_DUPLICATES)
+
+
+class SendDuplicatePromptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sends_captions_and_two_row_keyboard(self):
+        pending = {
+            "token": "token",
+            "existing_hash": "existing",
+            "new_hash": "new",
+            "distance": 5,
+            "existing_info": {
+                "mime": "image/png",
+                "size": 1024,
+                "width": 100,
+                "height": 80,
+            },
+            "new_info": {
+                "mime": "image/jpeg",
+                "size": 2048,
+                "width": 90,
+                "height": 70,
+            },
+            "new_content": b"new data",
+        }
+        hydrus = Mock()
+        hydrus.get_file_bytes.return_value = FakeResponse(
+            content=b"existing data"
+        )
+        bot = Mock()
+        bot.send_media_group = AsyncMock()
+        msg = FakeMessage(message_id=5)
+
+        async def run(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("start_script.run_hydrus", new=run):
+            await send_duplicate_prompt(bot, msg, hydrus, pending)
+
+        bot.send_media_group.assert_awaited_once()
+        chat_id, media = bot.send_media_group.await_args.args
+        self.assertEqual(chat_id, msg.chat.id)
+        self.assertEqual(len(media), 2)
+        self.assertIn("Первый (существующий)", media[0].caption)
+        self.assertIn("existing", media[0].caption)
+        self.assertIn("Второй (новый)", media[1].caption)
+        self.assertIn("new", media[1].caption)
+        self.assertEqual(len(msg.answers), 1)
+        keyboard = msg.answers[0][1]["reply_markup"]
+        self.assertEqual(len(keyboard.inline_keyboard), 2)
+        self.assertEqual(
+            [len(row) for row in keyboard.inline_keyboard],
+            [2, 2],
+        )
 
 
 class FileUploadDuplicateFlowTests(unittest.IsolatedAsyncioTestCase):
