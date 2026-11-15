@@ -310,7 +310,12 @@ class ImportUrlsWithDuplicatesTests(unittest.IsolatedAsyncioTestCase):
 
     def _hydrus(self, statuses):
         hydrus = Mock()
-        hydrus.add_files_from_urls_detailed.return_value = statuses
+        grouped: dict[str, list[dict]] = {}
+        for url, status in statuses:
+            grouped.setdefault(url, []).append(status)
+        hydrus.add_files_from_urls_detailed_multi.return_value = list(
+            grouped.items()
+        )
         hydrus.find_url_duplicates.return_value = None
         hydrus.get_file_info.return_value = {"hash": "info"}
         return hydrus
@@ -575,6 +580,73 @@ class ImportUrlsWithDuplicatesTests(unittest.IsolatedAsyncioTestCase):
             "new_hash",
         )
         self.assertEqual(client.new_page_payloads, [])
+
+    async def test_known_url_sends_at_most_30_files(self):
+        url = "https://example.com/gallery"
+        statuses = [
+            (url, {"status": 2, "hash": f"h{i}", "note": ""})
+            for i in range(35)
+        ]
+        hydrus = self._hydrus(statuses)
+
+        with patch("start_script.run_hydrus", new=self._run_hydrus):
+            resp, send_hashes = await import_urls_with_duplicates(
+                hydrus,
+                [url],
+                tags=[],
+                priority_domains=set(),
+                pending_prompts=[],
+            )
+
+        self.assertEqual(len(resp), 35)
+        self.assertEqual(send_hashes, [f"h{i}" for i in range(30)])
+
+    async def test_new_url_sends_all_files(self):
+        url = "https://example.com/gallery"
+        statuses = [
+            (
+                url,
+                {
+                    "status": 2,
+                    "hash": f"h{i}",
+                    "note": "",
+                    "_imported_now": True,
+                },
+            )
+            for i in range(35)
+        ]
+        hydrus = self._hydrus(statuses)
+
+        with patch("start_script.run_hydrus", new=self._run_hydrus):
+            resp, send_hashes = await import_urls_with_duplicates(
+                hydrus,
+                [url],
+                tags=[],
+                priority_domains=set(),
+                pending_prompts=[],
+            )
+
+        self.assertEqual(len(resp), 35)
+        self.assertEqual(len(send_hashes), 35)
+
+    async def test_duplicate_check_runs_for_each_new_file(self):
+        url = "https://example.com/gallery"
+        hydrus = self._hydrus([
+            (url, {"status": 1, "hash": "h1", "note": ""}),
+            (url, {"status": 1, "hash": "h2", "note": ""}),
+        ])
+
+        with patch("start_script.run_hydrus", new=self._run_hydrus):
+            _, send_hashes = await import_urls_with_duplicates(
+                hydrus,
+                [url],
+                tags=[],
+                priority_domains=set(),
+                pending_prompts=[],
+            )
+
+        self.assertEqual(send_hashes, ["h1", "h2"])
+        self.assertEqual(hydrus.find_url_duplicates.call_count, 2)
 
 
 class HandleRequestErrorsTests(unittest.IsolatedAsyncioTestCase):

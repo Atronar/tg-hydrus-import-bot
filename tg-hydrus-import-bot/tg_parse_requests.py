@@ -14,7 +14,13 @@ from typing import Callable, Iterable, Mapping
 
 import aiogram.methods
 from aiogram import exceptions
-from aiogram.types import BufferedInputFile, FSInputFile, Message, MessageEntity
+from aiogram.types import (
+    BufferedInputFile,
+    FSInputFile,
+    InputMediaPhoto,
+    Message,
+    MessageEntity,
+)
 from loguru import logger
 from PIL import Image
 
@@ -337,15 +343,10 @@ async def _stream_content_to_temp(
 
     return await asyncio.to_thread(write_temp)
 
-async def send_content_from_response(
-    content_file: Response, msg: Message, filename: str
-) -> Message | None:
-    """Отправка содержимого результата запроса (из Гидруса) в Телеграм,
-    основываясь на его Content-Type.
-
-    Файл потоково сохраняется во временный файл. В память он читается
-    только если нужна конвертация видео или сжатие изображения.
-    """
+async def _prepare_temp_content(
+    content_file: Response
+) -> tuple[Path, str, int] | None:
+    """Сохраняет ответ Hydrus во временный файл и возвращает его параметры."""
     content_type = content_file.headers.get("Content-Type", "")
     media_type = content_type.split(";", 1)[0].strip().lower()
     logger.debug(f"Content-Type: {content_type}")
@@ -366,8 +367,48 @@ async def send_content_from_response(
         logger.warning(f"Файл превысил лимит: {MAX_FILE_SIZE} байт")
         return None
 
+    return temp_path, media_type, temp_path.stat().st_size
+
+
+def _unlink_temp(path: Path) -> None:
     try:
-        file_size = temp_path.stat().st_size
+        path.unlink()
+    except OSError:
+        pass
+
+
+async def send_content_from_response(
+    content_file: Response, msg: Message, filename: str
+) -> Message | None:
+    """Отправка содержимого результата запроса (из Гидруса) в Телеграм,
+    основываясь на его Content-Type.
+
+    Файл потоково сохраняется во временный файл. В память он читается
+    только если нужна конвертация видео или сжатие изображения.
+    """
+    prepared = await _prepare_temp_content(content_file)
+    if prepared is None:
+        return None
+    temp_path, media_type, file_size = prepared
+    try:
+        return await _send_temp_content(
+            temp_path, media_type, file_size, msg, filename
+        )
+    finally:
+        _unlink_temp(temp_path)
+
+
+async def _send_temp_content(
+    temp_path: Path,
+    media_type: str,
+    file_size: int,
+    msg: Message,
+    filename: str,
+    *,
+    cleanup: bool = True
+) -> Message | None:
+    """Отправляет уже сохранённый во временный файл контент."""
+    try:
         answer_kwargs = {}
         content: bytes | None = None
         is_photo = False
@@ -461,10 +502,86 @@ async def send_content_from_response(
                 )
             raise
     finally:
+        if cleanup:
+            _unlink_temp(temp_path)
+
+
+MAX_MEDIA_GROUP_SIZE = 10
+
+
+async def send_contents_from_responses(
+    contents: Iterable[tuple[Response, str]], msg: Message
+) -> None:
+    """Отправляет несколько файлов, группируя соседние фото в альбомы."""
+    photo_batch: list[tuple[Path, str, int, str]] = []
+
+    async def flush_photos() -> None:
+        nonlocal photo_batch
+        if not photo_batch:
+            return
+        batch = photo_batch
+        photo_batch = []
         try:
-            temp_path.unlink()
-        except OSError:
-            pass
+            for start in range(0, len(batch), MAX_MEDIA_GROUP_SIZE):
+                chunk = batch[start:start + MAX_MEDIA_GROUP_SIZE]
+                if len(chunk) == 1:
+                    path, media_type, file_size, filename = chunk[0]
+                    await _send_temp_content(
+                        path, media_type, file_size, msg, filename,
+                        cleanup=False
+                    )
+                    continue
+                media = [
+                    InputMediaPhoto(media=FSInputFile(path, filename))
+                    for path, _media_type, _file_size, filename in chunk
+                ]
+                try:
+                    await msg.answer_media_group(
+                        media,
+                        reply_to_message_id=msg.message_id
+                    )
+                except exceptions.TelegramBadRequest as ex:
+                    logger.warning(
+                        "Не удалось отправить альбом, отправляем по одному: "
+                        f"{ex}"
+                    )
+                    for path, media_type, file_size, filename in chunk:
+                        await _send_temp_content(
+                            path, media_type, file_size, msg, filename,
+                            cleanup=False
+                        )
+        finally:
+            for path, _media_type, _file_size, _filename in batch:
+                _unlink_temp(path)
+
+    for content_file, filename in contents:
+        prepared = await _prepare_temp_content(content_file)
+        if prepared is None:
+            continue
+        temp_path, media_type, file_size = prepared
+        if media_type.startswith("image/") and media_type != "image/gif":
+            dimensions = await asyncio.to_thread(
+                _image_dimensions, temp_path
+            )
+            if (
+                dimensions
+                and _photo_dimensions_are_valid(*dimensions)
+                and file_size <= MAX_PHOTO_SIZE
+            ):
+                photo_batch.append(
+                    (temp_path, media_type, file_size, filename)
+                )
+                continue
+        await flush_photos()
+        try:
+            await _send_temp_content(
+                temp_path, media_type, file_size, msg, filename,
+                cleanup=False
+            )
+        finally:
+            _unlink_temp(temp_path)
+    await flush_photos()
+
 
 def get_success_reply_str(
         type_content_name: str,

@@ -477,17 +477,24 @@ class HydrusRequests:
     def _poll_url_statuses(
             self,
             pending: list[tuple[int, str]],
-            statuses: list[hydrus_api_typing.AddedFile | None],
+            statuses: list[list[hydrus_api_typing.AddedFile] | None],
             *,
+            precheck_hashes: list[set[str]],
             cleaned_tags: list[str],
-            tags_namespace_hash: str | None
+            tags_namespace_hash: str | None,
+            tagged_hashes: set[str]
         ) -> list[tuple[int, str]]:
         """Опрашивает статусы ссылок до общего таймаута.
 
-        Возвращает ссылки, по которым статус так и не появился.
+        Hydrus возвращает все файлы, уже привязанные к ссылке, а не один.
+        Поэтому ссылка считается готовой, когда набор её файлов перестал
+        меняться между опросами. Возвращает ссылки, по которым статус так
+        и не появился.
         """
         deadline = time.monotonic() + URL_IMPORT_TIMEOUT
         delay = URL_IMPORT_INITIAL_DELAY
+        last_hashes: dict[int, frozenset[str]] = {}
+        stable_counts: dict[int, int] = {}
         while pending and time.monotonic() < deadline:
             still_pending: list[tuple[int, str]] = []
             for index, url in pending:
@@ -505,36 +512,61 @@ class HydrusRequests:
                     logger.warning(f"Не удалось опросить статус {url}: {ex}")
                     still_pending.append((index, url))
                     continue
-                if url_file_statuses:
-                    status = url_file_statuses[0]
-                    # status 0 означает, что Hydrus помнит ссылку, но файла
-                    # ещё/уже нет. Это не результат импорта: продолжаем ждать.
-                    if status.get("status") == AddedFileStatus.UNKNOWN:
-                        still_pending.append((index, url))
-                        continue
+
+                # status 0 означает, что Hydrus помнит ссылку, но файла
+                # ещё/уже нет. Это не результат импорта: такие записи
+                # не считаем файлами ссылки.
+                final_statuses = [
+                    status for status in url_file_statuses
+                    if status.get("status") != AddedFileStatus.UNKNOWN
+                ]
+                if not final_statuses:
+                    still_pending.append((index, url))
+                    continue
+
+                prepared: list[hydrus_api_typing.AddedFile] = []
+                for status in final_statuses:
+                    file_hash = status.get("hash") or ""
                     # get_url_files возвращает статус 2 для любого файла,
                     # уже находящегося в базе, в том числе только что
-                    # импортированного. Помечаем статусы, полученные после
-                    # нашей попытки импорта, чтобы вызывающий код проверил
-                    # перцептивные дубликаты.
-                    status = {**status, "_imported_now": True}
-                    statuses[index] = status
-                    # Ссылка могла стать известной уже после add_url
+                    # импортированного. Новыми считаем только те файлы,
+                    # которых не было до нашей попытки импорта.
+                    if file_hash and file_hash not in precheck_hashes[index]:
+                        status = {**status, "_imported_now": True}
+                    prepared.append(status)
+
+                    # К уже существующему файлу теги из add_url не
+                    # доимпортируются, поэтому добавляем их вручную.
                     if (
                         cleaned_tags
                         and status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE
+                        and file_hash
+                        and file_hash not in tagged_hashes
                     ):
                         try:
                             self._add_tags_cleaned(
-                                status.get("hash"),
+                                file_hash,
                                 cleaned_tags,
                                 tags_namespace_hash
                             )
+                            tagged_hashes.add(file_hash)
                         except hydrus_api.HydrusAPIException as ex:
                             logger.warning(
                                 f"Не удалось добавить теги к {url}: {ex}"
                             )
+
+                statuses[index] = prepared
+                hashes = frozenset(
+                    status.get("hash") or "" for status in prepared
+                )
+                if last_hashes.get(index) == hashes:
+                    stable_counts[index] = stable_counts.get(index, 1) + 1
                 else:
+                    stable_counts[index] = 1
+                last_hashes[index] = hashes
+
+                # Ждём, пока список файлов перестанет пополняться.
+                if stable_counts[index] < 2:
                     still_pending.append((index, url))
             pending = still_pending
             if pending and time.monotonic() < deadline:
@@ -574,8 +606,8 @@ class HydrusRequests:
 
         Returns
         -------
-        tuple[list[str], list[AddedFile | None]]
-            Уникальные ссылки и их статусы в том же порядке.
+        tuple[list[str], list[list[AddedFile] | None]]
+            Уникальные ссылки и списки их статусов в том же порядке.
             Для ссылок, по которым статус так и не появился, остаётся None.
         """
         # Без прав на работу со ссылками не имеет смысла
@@ -609,9 +641,13 @@ class HydrusRequests:
             else:
                 logger.warning('Отсутствует доступ "edit file tags"')
 
-        statuses: list[hydrus_api_typing.AddedFile|None] = [None] * len(unique_urls)
+        statuses: list[list[hydrus_api_typing.AddedFile] | None] = (
+            [None] * len(unique_urls)
+        )
+        precheck_hashes: list[set[str]] = [set() for _ in unique_urls]
         pending: list[tuple[int, str]] = []
         add_url_notes: dict[int, str] = {}
+        tagged_hashes: set[str] = set()
 
         # Сначала ставим в очередь все ссылки, сохраняя их порядок
         for index, url in enumerate(unique_urls):
@@ -626,36 +662,64 @@ class HydrusRequests:
                 # может сработать, а статус потом выяснится при опросе.
                 logger.warning(f"Не удалось проверить статус {url}: {ex}")
 
+            final_precheck = [
+                status for status in url_file_statuses
+                if status.get("status") != AddedFileStatus.UNKNOWN
+            ]
+            precheck_hashes[index] = {
+                status.get("hash") or "" for status in final_precheck
+            } - {""}
+
             should_poll = True
             reimported = False
-            if url_file_statuses:
-                status = url_file_statuses[0]
-                # К уже существующему файлу теги из add_url не доимпортируются
-                if (
-                    cleaned_tags
-                    and status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE
+            if final_precheck:
+                statuses[index] = final_precheck
+                # К уже существующим файлам теги из add_url не
+                # доимпортируются, поэтому добавляем их вручную.
+                if cleaned_tags:
+                    for status in final_precheck:
+                        file_hash = status.get("hash")
+                        if (
+                            status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE
+                            and file_hash
+                            and file_hash not in tagged_hashes
+                        ):
+                            try:
+                                self._add_tags_cleaned(
+                                    file_hash,
+                                    cleaned_tags,
+                                    tags_namespace_hash
+                                )
+                                tagged_hashes.add(file_hash)
+                            except hydrus_api.HydrusAPIException as ex:
+                                logger.warning(
+                                    f"Не удалось добавить теги к {url}: {ex}"
+                                )
+                # Все файлы уже есть в базе — опрашивать ссылку не нужно
+                if all(
+                    status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE
+                    for status in final_precheck
                 ):
-                    self._add_tags_cleaned(
-                        status.get("hash"),
-                        cleaned_tags,
-                        tags_namespace_hash
-                    )
-                # Готовый статус уже есть — опрашивать ссылку не нужно
-                if status.get("status") == AddedFileStatus.ALREADY_IN_DATABASE:
-                    statuses[index] = status
                     should_poll = False
-                elif status.get("status") == AddedFileStatus.UNKNOWN:
-                    # Hydrus помнит ссылку, но файла уже нет. Обычный
-                    # add_url на существующую страницу её не переобработает,
-                    # поэтому создаём отдельную страницу импорта.
-                    page_info = self.reimport_url(url)
-                    if page_info:
-                        reimported = True
-                        reimport_page_name = page_info.get("page_name")
-                        if reimport_page_name:
-                            add_url_notes[index] = (
-                                f"создана страница {reimport_page_name}"
-                            )
+
+            if any(
+                status.get("status") == AddedFileStatus.UNKNOWN
+                for status in url_file_statuses
+            ):
+                # Hydrus помнит ссылку, но файла уже нет. Обычный
+                # add_url на существующую страницу её не переобработает,
+                # поэтому создаём отдельную страницу импорта.
+                page_info = self.reimport_url(url)
+                if page_info:
+                    reimported = True
+                    should_poll = True
+                    reimport_page_name = page_info.get("page_name")
+                    if reimport_page_name:
+                        add_url_notes[index] = (
+                            f"создана страница {reimport_page_name}"
+                        )
+                else:
+                    should_poll = False
 
             # Собственно, импорт, как в клиенте
             if not reimported:
@@ -671,9 +735,17 @@ class HydrusRequests:
                             add_url_notes[index] = str(result_text)
                 except hydrus_api.HydrusAPIException as ex:
                     logger.error(f"Не удалось поставить в очередь {url}: {ex}")
-                    # Если файл уже был в базе, его статус важнее ошибки add_url
-                    if statuses[index] is None:
-                        statuses[index] = self._failed_status(ex)
+                    # Если файлы уже были в базе, их статусы важнее ошибки.
+                    # Иначе ошибка add_url и есть результат импорта.
+                    has_ready_status = any(
+                        status.get("status") in (
+                            AddedFileStatus.ALREADY_IN_DATABASE,
+                            AddedFileStatus.PREVIOUSLY_DELETED,
+                        )
+                        for status in final_precheck
+                    )
+                    if not has_ready_status:
+                        statuses[index] = [self._failed_status(ex)]
                         should_poll = False
 
             if should_poll:
@@ -683,8 +755,10 @@ class HydrusRequests:
         pending = self._poll_url_statuses(
             pending,
             statuses,
+            precheck_hashes=precheck_hashes,
             cleaned_tags=cleaned_tags,
-            tags_namespace_hash=tags_namespace_hash
+            tags_namespace_hash=tags_namespace_hash,
+            tagged_hashes=tagged_hashes
         )
 
         # Hydrus иногда не сообщает статус для ссылки, добавленной на
@@ -713,8 +787,10 @@ class HydrusRequests:
                 pending = self._poll_url_statuses(
                     retry_pending,
                     statuses,
+                    precheck_hashes=precheck_hashes,
                     cleaned_tags=cleaned_tags,
-                    tags_namespace_hash=tags_namespace_hash
+                    tags_namespace_hash=tags_namespace_hash,
+                    tagged_hashes=tagged_hashes
                 )
 
         if pending:
@@ -738,7 +814,11 @@ class HydrusRequests:
                         f"{note} Повторный импорт на отдельной странице "
                         "тоже не дал статуса."
                     )
-                statuses[index] = self._timeout_status(note)
+                timeout_status = self._timeout_status(note)
+                if statuses[index]:
+                    statuses[index] = [*statuses[index], timeout_status]
+                else:
+                    statuses[index] = [timeout_status]
         return unique_urls, statuses
 
     def add_files_from_urls(
@@ -756,7 +836,11 @@ class HydrusRequests:
             tags=tags,
             tags_namespace=tags_namespace
         )
-        return [status for status in statuses if status is not None]
+        return [
+            status
+            for url_statuses in statuses if url_statuses
+            for status in url_statuses
+        ]
 
     def add_files_from_urls_detailed(
             self,
@@ -766,10 +850,11 @@ class HydrusRequests:
             tags: Iterable[str]|None = None,
             tags_namespace: str|None = None
         ) -> list[tuple[str, hydrus_api_typing.AddedFile]]:
-        """Добавление ссылок и возврат пар «ссылка — статус».
+        """Добавление ссылок и возврат пар «ссылка — первый статус».
 
-        Нужен, когда вызывающему коду важно знать, к какой ссылке
-        относится каждый статус: например, для проверки дубликатов.
+        Оставлено для совместимости. Если Hydrus вернул для ссылки
+        несколько файлов, здесь будет только первый из них; полный
+        список доступен в :meth:`add_files_from_urls_detailed_multi`.
         Ссылки без статуса пропускаются.
         """
         unique_urls, statuses = self._add_files_from_urls(
@@ -779,9 +864,34 @@ class HydrusRequests:
             tags_namespace=tags_namespace
         )
         return [
-            (url, status)
-            for url, status in zip(unique_urls, statuses)
-            if status is not None
+            (url, url_statuses[0])
+            for url, url_statuses in zip(unique_urls, statuses)
+            if url_statuses
+        ]
+
+    def add_files_from_urls_detailed_multi(
+            self,
+            urls: Iterable[str],
+            *,
+            page_name: str|None = None,
+            tags: Iterable[str]|None = None,
+            tags_namespace: str|None = None
+        ) -> list[tuple[str, list[hydrus_api_typing.AddedFile]]]:
+        """Добавление ссылок и возврат всех файлов каждой ссылки.
+
+        Hydrus может привязать к одной ссылке несколько файлов,
+        например изображений с одной страницы.
+        """
+        unique_urls, statuses = self._add_files_from_urls(
+            urls,
+            page_name=page_name,
+            tags=tags,
+            tags_namespace=tags_namespace
+        )
+        return [
+            (url, url_statuses)
+            for url, url_statuses in zip(unique_urls, statuses)
+            if url_statuses
         ]
 
     def add_file_from_url(

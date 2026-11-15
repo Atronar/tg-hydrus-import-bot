@@ -35,6 +35,7 @@ from tg_parse_requests import (
     get_urls_from_msg,
     mime_subtype,
     send_content_from_response,
+    send_contents_from_responses,
 )
 from tests.helpers import FakeMessage, FakeResponse
 
@@ -399,6 +400,97 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await send_content_from_response(response, msg, "big.bin"))
         self.assertEqual(msg.media, [])
         self.assertTrue(response.closed)
+
+
+class MultiContentTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _photo_response(color=(10, 20, 30)) -> FakeResponse:
+        source = BytesIO()
+        Image.new("RGB", (100, 100), color).save(source, "JPEG")
+        content = source.getvalue()
+        return FakeResponse(
+            content=content,
+            headers={
+                "Content-Type": "image/jpeg",
+                "Content-Length": str(len(content)),
+            },
+        )
+
+    @staticmethod
+    def _document_response() -> FakeResponse:
+        return FakeResponse(
+            content=b"pdf",
+            headers={
+                "Content-Type": "application/pdf",
+                "Content-Length": "3",
+            },
+        )
+
+    async def test_two_photos_are_grouped(self):
+        msg = FakeMessage()
+        await send_contents_from_responses(
+            [
+                (self._photo_response((1, 2, 3)), "a.jpg"),
+                (self._photo_response((4, 5, 6)), "b.jpg"),
+            ],
+            msg,
+        )
+
+        self.assertEqual(len(msg.media_groups), 1)
+        self.assertEqual(len(msg.media_groups[0]), 2)
+        self.assertEqual(msg.media, [])
+
+    async def test_album_is_split_into_batches_of_ten(self):
+        msg = FakeMessage()
+        await send_contents_from_responses(
+            [
+                (self._photo_response((index, 0, 0)), f"{index}.jpg")
+                for index in range(11)
+            ],
+            msg,
+        )
+
+        self.assertEqual(len(msg.media_groups), 1)
+        self.assertEqual(len(msg.media_groups[0]), 10)
+        self.assertEqual([kind for kind, _, _ in msg.media], ["photo"])
+
+    async def test_non_photo_splits_album(self):
+        msg = FakeMessage()
+        await send_contents_from_responses(
+            [
+                (self._photo_response((1, 0, 0)), "a.jpg"),
+                (self._photo_response((2, 0, 0)), "b.jpg"),
+                (self._document_response(), "c.pdf"),
+                (self._photo_response((3, 0, 0)), "d.jpg"),
+                (self._photo_response((4, 0, 0)), "e.jpg"),
+            ],
+            msg,
+        )
+
+        self.assertEqual(len(msg.media_groups), 2)
+        self.assertEqual(
+            [len(group) for group in msg.media_groups],
+            [2, 2],
+        )
+        self.assertEqual([kind for kind, _, _ in msg.media], ["document"])
+
+    async def test_album_failure_falls_back_to_individual_photos(self):
+        msg = FakeMessage()
+        msg.media_group_error = exceptions.TelegramBadRequest(
+            SendPhoto(chat_id=1, photo="x"),
+            "album failed",
+        )
+
+        await send_contents_from_responses(
+            [
+                (self._photo_response((1, 0, 0)), "a.jpg"),
+                (self._photo_response((2, 0, 0)), "b.jpg"),
+            ],
+            msg,
+        )
+
+        self.assertEqual(msg.media_groups, [])
+        self.assertEqual([kind for kind, _, _ in msg.media], ["photo", "photo"])
 
 
 class ExecutorTests(unittest.TestCase):

@@ -91,6 +91,9 @@ class FakeMessage:
         self.answers: list[tuple[str, dict[str, Any]]] = []
         self.media: list[tuple[str, Any, dict[str, Any]]] = []
         self.media_data: list[tuple[str, bytes, dict[str, Any]]] = []
+        self.media_groups: list[list[Any]] = []
+        self.media_group_data: list[list[bytes]] = []
+        self.media_group_error: Exception | None = None
 
     async def answer(self, text: str, **kwargs):
         self.answers.append((text, kwargs))
@@ -121,6 +124,19 @@ class FakeMessage:
     async def answer_document(self, file: Any, **kwargs):
         return await self._answer_media("document", file, **kwargs)
 
+    async def answer_media_group(self, media: list[Any], **kwargs):
+        if self.media_group_error:
+            raise self.media_group_error
+        data = [
+            Path(item.media.path).read_bytes()
+            if hasattr(item.media, "path")
+            else item.media.data
+            for item in media
+        ]
+        self.media_groups.append(list(media))
+        self.media_group_data.append(data)
+        return self
+
 
 class FakeHydrusClient:
     """Клиент Hydrus API с настраиваемыми ответами и записью вызовов."""
@@ -138,6 +154,7 @@ class FakeHydrusClient:
         self.cleaned_tags: list[str] = ["cleaned"]
         # Очередь ответов get_url_files для имитации асинхронного импорта
         self.url_file_statuses: dict[str, list[list[dict[str, Any]]]] = {}
+        self.last_url_file_statuses: dict[str, list[dict[str, Any]]] = {}
         self.duplicate_relationship_payloads: list[list[dict[str, Any]]] = []
         self.url_errors: dict[str, Exception] = {}
         self.add_url_errors: dict[str, Exception] = {}
@@ -222,7 +239,12 @@ class FakeHydrusClient:
             raise error
         responses = self.url_file_statuses.get(url)
         if responses:
-            return {"url_file_statuses": responses.pop(0)}
+            response = responses.pop(0)
+            self.last_url_file_statuses[url] = response
+            return {"url_file_statuses": response}
+        if url in self.last_url_file_statuses:
+            # Hydrus возвращает тот же набор, пока импорт не изменится.
+            return {"url_file_statuses": self.last_url_file_statuses[url]}
         return {"url_file_statuses": [{"status": 1, "hash": "url_hash"}]}
 
 

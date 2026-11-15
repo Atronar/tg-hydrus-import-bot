@@ -627,6 +627,80 @@ class UrlBatchImportTests(unittest.TestCase):
             client.calls,
         )
 
+    def test_collects_all_files_for_known_url(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "u1": [[
+                {"status": 2, "hash": "h1"},
+                {"status": 2, "hash": "h2"},
+            ]],
+        }
+        hydrus = make_hydrus({HydrusPermission.URL_IMPORT_EDIT}, client)
+
+        result = hydrus.add_files_from_urls(["u1"])
+
+        self.assertEqual(
+            result,
+            [
+                {"status": 2, "hash": "h1"},
+                {"status": 2, "hash": "h2"},
+            ],
+        )
+
+    def test_polling_collects_all_new_files(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "u1": [
+                [],
+                [
+                    {"status": 2, "hash": "h1"},
+                    {"status": 2, "hash": "h2"},
+                ],
+            ],
+        }
+        hydrus = make_hydrus({HydrusPermission.URL_IMPORT_EDIT}, client)
+        clock = [0.0]
+
+        def monotonic():
+            return clock[0]
+
+        def sleep(_delay):
+            clock[0] += 20
+
+        with patch("hydrus_requests.time.monotonic", new=monotonic), \
+                patch("hydrus_requests.time.sleep", new=sleep):
+            result = hydrus.add_files_from_urls(["u1"])
+
+        self.assertEqual(
+            [(item["hash"], item.get("_imported_now")) for item in result],
+            [("h1", True), ("h2", True)],
+        )
+
+    def test_adds_tags_to_all_existing_files(self):
+        client = FakeHydrusClient()
+        client.url_file_statuses = {
+            "u1": [[
+                {"status": 2, "hash": "h1"},
+                {"status": 2, "hash": "h2"},
+            ]],
+        }
+        hydrus = make_hydrus(
+            {HydrusPermission.URL_IMPORT_EDIT, HydrusPermission.TAGS_EDIT},
+            client,
+        )
+
+        result = hydrus.add_files_from_urls(["u1"], tags=["tag"])
+
+        self.assertEqual(len(result), 2)
+        add_tags_calls = [
+            call for call in client.calls if call[0] == "add_tags"
+        ]
+        self.assertEqual(len(add_tags_calls), 2)
+        self.assertEqual(
+            {call[1][0][0] for call in add_tags_calls},
+            {"h1", "h2"},
+        )
+
     def test_stops_polling_at_deadline(self):
         client = FakeHydrusClient()
         client.url_file_statuses = {"u1": [[]]}
@@ -652,17 +726,22 @@ class UrlBatchImportTests(unittest.TestCase):
     def test_timeout_retries_on_fallback_page(self):
         client = FakeHydrusClient()
         client.url_file_statuses = {
-            "u1": [[], [{"status": 2, "hash": "h1"}]],
+            "u1": [[], [], [{"status": 2, "hash": "h1"}]],
         }
         hydrus = make_hydrus(
             {HydrusPermission.URL_IMPORT_EDIT, HydrusPermission.PAGES},
             client,
         )
+        clock = [0.0]
 
-        with patch(
-            "hydrus_requests.time.monotonic",
-            side_effect=[0, 100, 200, 200, 200],
-        ), patch("hydrus_requests.time.sleep"):
+        def monotonic():
+            return clock[0]
+
+        def sleep(_delay):
+            clock[0] += 30
+
+        with patch("hydrus_requests.time.monotonic", new=monotonic), \
+                patch("hydrus_requests.time.sleep", new=sleep):
             result = hydrus.add_files_from_urls(["u1"])
 
         self.assertEqual(
