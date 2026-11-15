@@ -21,6 +21,7 @@ from hydrus_api_enums import (
 )
 import hydrus_api_typing
 from media_info import is_exact_duplicate, is_image_mime, probe_media
+from tools import bytes_strformat
 
 
 HYDRUS_TIMEOUT = (5.0, 60.0)
@@ -1065,7 +1066,10 @@ class HydrusRequests:
         return added_file
 
     @staticmethod
-    def convert_import_resp_to_str(resp: list[hydrus_api_typing.AddedFile]) -> str:
+    def convert_import_resp_to_str(
+        resp: list[hydrus_api_typing.AddedFile],
+        content_sizes: dict[str, int] | None = None
+    ) -> str:
         """Всего лишь метод, преобразовывающий ответ hydrus_import (в виде списка словарей),
         в человекочитаемом формате сообщения
 
@@ -1076,6 +1080,9 @@ class HydrusRequests:
             Подробнее:
             https://hydrusnetwork.github.io/hydrus/developer_api.html#add_urls_get_url_files
             (первый элемент "url_file_statuses")
+        content_sizes : dict[str, int] | None
+            Размеры файлов по хэшам. Если размер известен, он
+            добавляется в блок своего файла.
 
         Returns
         -------
@@ -1101,6 +1108,9 @@ class HydrusRequests:
                     parts.append(
                         f"status: {_ADDED_FILE_STATUS_NAMES[status]} ({value})"
                     )
+            file_hash = str(resp_item.get("hash") or "")
+            if content_sizes and file_hash in content_sizes:
+                parts.append(bytes_strformat(content_sizes[file_hash]))
             replies.append('\n'.join(parts))
         return '\n\n'.join(replies)
 

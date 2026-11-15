@@ -728,13 +728,13 @@ class SendImportedContentsTests(unittest.IsolatedAsyncioTestCase):
             "start_script.send_contents_from_responses",
             new=AsyncMock(),
         ) as send:
-            content_size = await send_imported_contents(
+            content_sizes = await send_imported_contents(
                 hydrus,
                 ["h1", "h2", "h1"],
                 msg,
             )
 
-        self.assertEqual(content_size, [10, 20])
+        self.assertEqual(content_sizes, {"h1": 10, "h2": 20})
         self.assertEqual(hydrus.get_file.call_count, 2)
         send.assert_awaited_once()
         contents = send.call_args.args[0]
@@ -752,13 +752,13 @@ class SendImportedContentsTests(unittest.IsolatedAsyncioTestCase):
             "start_script.send_contents_from_responses",
             new=AsyncMock(),
         ) as send:
-            content_size = await send_imported_contents(
+            content_sizes = await send_imported_contents(
                 hydrus,
                 ["h1", "h2"],
                 msg,
             )
 
-        self.assertEqual(content_size, [])
+        self.assertEqual(content_sizes, {})
         contents = send.call_args.args[0]
         self.assertEqual(len(contents), 1)
         self.assertEqual(contents[0][1], "h2")

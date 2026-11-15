@@ -384,18 +384,21 @@ async def send_imported_contents(
     hydrus: HydrusRequests,
     send_hashes: list[str],
     msg: Message
-) -> list[int]:
-    """Отправляет в Telegram файлы, импортированные по ссылкам."""
-    content_size: list[int] = []
+) -> dict[str, int]:
+    """Отправляет в Telegram файлы, импортированные по ссылкам.
+
+    Возвращает размеры отправленных файлов по хэшам.
+    """
+    content_sizes: dict[str, int] = {}
     contents = []
     for file_hash in dict.fromkeys(send_hashes):
         content_file = await run_hydrus(hydrus.get_file, file_hash)
         if content_file:
             if content_size_item := _content_length(content_file.headers):
-                content_size.append(content_size_item)
+                content_sizes[file_hash] = content_size_item
             contents.append((content_file, file_hash))
     await send_contents_from_responses(contents, msg)
-    return content_size
+    return content_sizes
 
 
 _SUCCESS_IMPORT_STATUSES = frozenset({
@@ -1036,8 +1039,15 @@ async def start_script():
                 await answer_with_retry(msg, f"{hash_str}: ошибка Hydrus API")
                 continue
 
-            await send_imported_contents(hydrus, send_hashes, msg)
-            resp_str = hydrus.convert_import_resp_to_str(resp)
+            url_content_sizes = await send_imported_contents(
+                hydrus,
+                send_hashes,
+                msg
+            )
+            resp_str = hydrus.convert_import_resp_to_str(
+                resp,
+                url_content_sizes
+            )
             reply = get_success_reply_str(
                 "хэш",
                 resp_str,
@@ -1187,9 +1197,15 @@ async def start_script():
             )
             resp.extend(file_resp)
             logger.debug(f"{resp}")
-            resp_str = hydrus.convert_import_resp_to_str(resp)
-
-            await send_imported_contents(hydrus, url_send_hashes, msg)
+            url_content_sizes = await send_imported_contents(
+                hydrus,
+                url_send_hashes,
+                msg
+            )
+            resp_str = hydrus.convert_import_resp_to_str(
+                resp,
+                url_content_sizes
+            )
             content_file.seek(0, io.SEEK_END)
 
             reply = get_success_reply_str(
@@ -1241,9 +1257,15 @@ async def start_script():
                 )
                 resp.extend(file_resp)
                 logger.debug(f"{resp}")
-                resp_str = hydrus.convert_import_resp_to_str(resp)
-
-                await send_imported_contents(hydrus, url_send_hashes, msg)
+                url_content_sizes = await send_imported_contents(
+                    hydrus,
+                    url_send_hashes,
+                    msg
+                )
+                resp_str = hydrus.convert_import_resp_to_str(
+                    resp,
+                    url_content_sizes
+                )
                 reply = get_success_reply_str(
                     "видео",
                     resp_str,
@@ -1301,9 +1323,15 @@ async def start_script():
                 )
                 resp.extend(file_resp)
                 logger.debug(f"{resp}")
-                resp_str = hydrus.convert_import_resp_to_str(resp)
-
-                await send_imported_contents(hydrus, url_send_hashes, msg)
+                url_content_sizes = await send_imported_contents(
+                    hydrus,
+                    url_send_hashes,
+                    msg
+                )
+                resp_str = hydrus.convert_import_resp_to_str(
+                    resp,
+                    url_content_sizes
+                )
                 reply = get_success_reply_str(
                     "аудио",
                     resp_str,
@@ -1354,9 +1382,15 @@ async def start_script():
                 )
                 resp.extend(file_resp)
                 logger.debug(f"{resp}")
-                resp_str = hydrus.convert_import_resp_to_str(resp)
-
-                await send_imported_contents(hydrus, url_send_hashes, msg)
+                url_content_sizes = await send_imported_contents(
+                    hydrus,
+                    url_send_hashes,
+                    msg
+                )
+                resp_str = hydrus.convert_import_resp_to_str(
+                    resp,
+                    url_content_sizes
+                )
                 reply = get_success_reply_str(
                     "документ",
                     resp_str,
@@ -1383,20 +1417,22 @@ async def start_script():
             )
 
             logger.debug(f"{resp}")
-            resp_str = hydrus.convert_import_resp_to_str(resp)
 
             # Отправка собственно скачанного контента.
             # Хэши уже удалённых дубликатов сюда не попадают.
-            content_size = await send_imported_contents(
+            content_sizes = await send_imported_contents(
                 hydrus,
                 send_hashes,
                 msg
             )
+            resp_str = hydrus.convert_import_resp_to_str(
+                resp,
+                content_sizes
+            )
 
             reply = get_success_reply_str(
                 "текст",
-                resp_str,
-                content_size=content_size
+                resp_str
             )
         else:
             logger.warning(f"{msg}")

@@ -1079,6 +1079,18 @@ class ConvertResponseTests(unittest.TestCase):
         self.assertNotIn("_imported_now", result)
         self.assertIn("hash: abc", result)
 
+    def test_places_sizes_inside_their_blocks(self):
+        result = HydrusRequests.convert_import_resp_to_str(
+            [
+                {"status": 2, "hash": "abc", "note": "first"},
+                {"status": 2, "hash": "def", "note": "second"},
+            ],
+            content_sizes={"abc": 1024, "def": 2048},
+        )
+        self.assertIn("hash: abc\nnote: first\n1.0 KiB", result)
+        self.assertIn("hash: def\nnote: second\n2.0 KiB", result)
+        self.assertNotIn("1.0 KiB\n2.0 KiB", result)
+
 
 class TimeoutSessionTests(unittest.TestCase):
     def test_default_timeout_is_applied(self):
